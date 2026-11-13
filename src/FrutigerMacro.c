@@ -38,7 +38,7 @@ enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID
        ID_TYPOP, ID_BURSTP, ID_PAUSEP,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
-       ID_UCHECK = 701, ID_UINSTALL, ID_UPAGE, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
+       ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
        ID_TEST = 501, ID_TRESTART, ID_TCLEAR, ID_TNEW, ID_TFIN, ID_TAPPLY, ID_TCLOSE, ID_TEDIT,
        ID_HK0 = 301, ID_HK1, ID_HK2, ID_HK3, ID_HKAPPLY, ID_STATUS = 400 };
 
@@ -665,20 +665,24 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.6"
-#define APP_VERSION_W L"1.14.6"
-#define WM_UPDCHECKED (WM_APP + 5)
-#define WM_UPDFAIL    (WM_APP + 6)
-#define WM_UPDRESTART (WM_APP + 7)
+#define APP_VERSION   "1.14.7"
+#define APP_VERSION_W L"1.14.7"
+#define WM_UPDCHECKED  (WM_APP + 5)
+#define WM_UPDFAIL     (WM_APP + 6)
+#define WM_UPDRESTART  (WM_APP + 7)
+#define WM_UPDPROGRESS (WM_APP + 10)
 
-enum { CONN_UNKNOWN, CONN_CHECKING, CONN_ONLINE, CONN_OFFLINE, CONN_ERROR };
-static int updConn = CONN_UNKNOWN, updAvail, justUpdated;
-static volatile LONG updBusy;
+enum { US_CHECKING, US_CURRENT, US_AVAILABLE, US_DOWNLOADING, US_INSTALLING, US_OFFLINE, US_ERROR, US_FAILED };
+static volatile LONG updState, updPct, updBusy;
+static int updAvail, justUpdated;
 static wchar_t updRepo[128] = L"binjin-maker/FAUP";
-static wchar_t updLatest[32], updUrl[1024], updPage[512], updDigest[80], updConnMsg[160];
+static wchar_t updLatest[32], updUrl[1024], updDigest[80], updDetail[200];
 static wchar_t *updNotes;
-static int updErr;
-static SYSTEMTIME updWhen; static int updChecked;
+
+static int updLight(void) {
+    static const int L[] = { 0x2b9be6, 0x34c23a, 0xf5b31a, 0x2b9be6, 0x2b9be6, 0xe0483a, 0xe0483a, 0xe0483a };
+    return L[(int)updState];
+}
 static wchar_t exePath[MAX_PATH];
 static void saveSettings(void);
 static int busy(void);
@@ -706,7 +710,7 @@ static int httpGet(const wchar_t *url, const wchar_t *hdrs, char **out, size_t *
         len += got;
         if (progress && total) {
             int pct = (int)(len * 100 / total);
-            if (pct != lastPct) { lastPct = pct; status(L"Downloading update… %d%%", pct); }
+            if (pct != lastPct) { lastPct = pct; updPct = pct; PostMessageW(hMain, WM_UPDPROGRESS, 0, 0); status(L"Downloading update… %d%%", pct); }
         }
         if (len > (64u << 20)) { err = -2; break; }
     }
@@ -785,62 +789,62 @@ static DWORD WINAPI CheckThread(LPVOID unused) {
     swprintf(url, 300, L"https://raw.githubusercontent.com/%s/main/update/latest.json?t=%llu", updRepo, (unsigned long long)GetTickCount64());
     char *b; size_t len; DWORD st;
     int e = httpGet(url, L"Cache-Control: no-cache\r\n", &b, &len, &st, 0);
-    int conn = CONN_ONLINE, avail = 0;
-    wchar_t latest[32] = L"", dl[1024] = L"", page[512] = L"", dig[80] = L"", msg[160] = L"";
+    int state = US_CURRENT, avail = 0;
+    wchar_t latest[32] = L"", dl[1024] = L"", dig[80] = L"";
+    const wchar_t *detail = L"";
     wchar_t *notes = NULL;
-    swprintf(page, 512, L"https://github.com/%s", updRepo);
     if (e) {
-        conn = (e == ERROR_INTERNET_NAME_NOT_RESOLVED || e == ERROR_INTERNET_CANNOT_CONNECT ||
-                e == ERROR_INTERNET_TIMEOUT || e == ERROR_INTERNET_DISCONNECTED) ? CONN_OFFLINE : CONN_ERROR;
-        if (conn == CONN_OFFLINE) wcscpy(msg, L"Offline — no internet connection (everything else still works)");
-        else swprintf(msg, 160, L"Couldn't reach GitHub (network error %d) — maybe a school/work firewall", e);
-    } else if (st == 404) {
-        wcscpy(msg, L"Online — but no update has been published to the repo yet");
-    } else if (st == 403 || st == 429) {
-        conn = CONN_ERROR;
-        wcscpy(msg, L"Online — GitHub rate-limited the check, try again in a bit");
-    } else if (st != 200) {
-        conn = CONN_ERROR;
-        swprintf(msg, 160, L"Online — update server answered HTTP %lu", (unsigned long)st);
-    } else {
-        wcscpy(msg, L"Online — connected to GitHub");
-        char *ver = jsonStr(b, "version", NULL, NULL), *u8 = jsonStr(b, "url", NULL, NULL);
-        char *sha = jsonStr(b, "sha256", NULL, NULL), *nt = jsonStr(b, "notes", NULL, NULL);
-        if (ver) { latest[0] = L'v'; u8w(ver, latest + 1, 31); }
-        u8w(u8, dl, 1024); u8w(sha, dig, 80);
+        int off = e == ERROR_INTERNET_NAME_NOT_RESOLVED || e == ERROR_INTERNET_CANNOT_CONNECT ||
+                  e == ERROR_INTERNET_TIMEOUT || e == ERROR_INTERNET_DISCONNECTED;
+        state = off ? US_OFFLINE : US_ERROR;
+        detail = off ? L"Connect to the internet, then check again." : L"The update server didn't answer. Try again in a bit.";
+    } else if (st == 200) {
+        char *ver = jsonStr(b, "version", NULL, NULL), *u8 = jsonStr(b, "url", NULL, NULL), *sha = jsonStr(b, "sha256", NULL, NULL);
+        u8w(ver, latest, 32); u8w(u8, dl, 1024); u8w(sha, dig, 80);
+        avail = latest[0] && dl[0] && verNewer(latest, APP_VERSION_W);
+        if (avail) state = US_AVAILABLE;
+        char *nt = jsonStr(b, "notes", NULL, NULL);
         notes = cleanNotes(nt ? nt : "");
-        if (latest[0] && verNewer(latest, APP_VERSION_W)) avail = dl[0] ? 1 : 2;
         free(ver); free(u8); free(sha); free(nt);
+    } else if (st != 404) {
+        state = US_ERROR;
+        detail = L"The update server is busy. Try again in a bit.";
     }
     free(b);
-    wcscpy(updLatest, latest); wcscpy(updUrl, dl); wcscpy(updPage, page); wcscpy(updDigest, dig); wcscpy(updConnMsg, msg);
-    free(updNotes); updNotes = notes;
-    updConn = conn; updAvail = avail;
-    GetLocalTime(&updWhen); updChecked = 1;
+    wcscpy(updLatest, latest); wcscpy(updUrl, dl); wcscpy(updDigest, dig); wcscpy(updDetail, detail);
+    updAvail = avail; updState = state;
     InterlockedExchange(&updBusy, 0);
-    PostMessageW(hMain, WM_UPDCHECKED, 0, 0);
+    PostMessageW(hMain, WM_UPDCHECKED, 0, (LPARAM)notes);
     return 0;
 }
 
 static void fillNotes(void) {
-    const wchar_t *src = (updNotes && updNotes[0]) ? updNotes :
-        updConn == CONN_OFFLINE ? L"Changelog unavailable offline." :
-        updConn == CONN_CHECKING ? L"Checking for updates…" :
-        updLatest[0] ? L"No release notes for this version." : L"No changelog yet — press Check now.";
-    size_t n = wcslen(src);
+    int st = (int)updState;
+    const wchar_t *s = updNotes && updNotes[0] ? updNotes :
+        st == US_CHECKING ? L"Checking for updates…" :
+        st == US_OFFLINE || st == US_ERROR ? L"The changelog shows up once the app can check for updates." : L"No changelog yet.";
+    size_t n = wcslen(s);
     wchar_t *o = malloc((n * 2 + 1) * sizeof(wchar_t)), *q = o;
-    for (const wchar_t *p = src; *p; p++) { if (*p == L'\n') *q++ = L'\r'; *q++ = *p; }
+    for (const wchar_t *p = s; *p; p++) { if (*p == L'\n') *q++ = L'\r'; *q++ = *p; }
     *q = 0;
     SetDlgItemTextW(hMain, ID_UNOTES, o);
     free(o);
 }
 
+static void updSync(void) {
+    fillNotes();
+    HWND b = GetDlgItem(hMain, ID_UACTION);
+    int st = (int)updState;
+    SetWindowTextW(b, st == US_CHECKING ? L"Checking…" : st == US_DOWNLOADING || st == US_INSTALLING ? L"Updating…" :
+                      updAvail ? L"Install update" : L"Check for updates");
+    InvalidateRect(b, NULL, FALSE);
+    InvalidateRect(hMain, NULL, FALSE);
+}
+
 static void startCheck(void) {
     if (InterlockedCompareExchange(&updBusy, 1, 0)) return;
-    updConn = CONN_CHECKING; updErr = 0;
-    wcscpy(updConnMsg, L"Checking…");
-    fillNotes();
-    InvalidateRect(hMain, NULL, FALSE);
+    updState = US_CHECKING; updDetail[0] = 0;
+    updSync();
     CloseHandle(CreateThread(NULL, 0, CheckThread, NULL, 0, NULL));
 }
 
@@ -866,12 +870,14 @@ static DWORD WINAPI InstallThread(LPVOID unused) {
     status(L"Downloading update %s…", updLatest);
     char *b; size_t len; DWORD st;
     int e = httpGet(updUrl, NULL, &b, &len, &st, 1);
-    if (e || st != 200) { free(b); updFail(L"Update download failed — check your connection and try again."); return 0; }
-    if (len < 20000 || b[0] != 'M' || b[1] != 'Z') { free(b); updFail(L"The downloaded file isn't a valid EXE, so nothing was changed."); return 0; }
+    if (e || st != 200) { free(b); updFail(L"The download didn't finish. Check your internet and try again."); return 0; }
+    if (len < 20000 || b[0] != 'M' || b[1] != 'Z') { free(b); updFail(L"The download came through damaged, so nothing was changed. Try again."); return 0; }
     if (updDigest[0]) {
         wchar_t hex[80] = L"";
-        if (!sha256Hex(b, len, hex) || _wcsicmp(hex, updDigest)) { free(b); updFail(L"Update failed its checksum check, so nothing was changed."); return 0; }
+        if (!sha256Hex(b, len, hex) || _wcsicmp(hex, updDigest)) { free(b); updFail(L"The download didn't pass its safety check, so nothing was changed."); return 0; }
     }
+    updState = US_INSTALLING;
+    PostMessageW(hMain, WM_UPDPROGRESS, 0, 0);
     wchar_t newPath[MAX_PATH + 16], oldPath[MAX_PATH + 16];
     swprintf(newPath, MAX_PATH + 16, L"%s.new", exePath);
     HANDLE f = CreateFileW(newPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -879,7 +885,7 @@ static DWORD WINAPI InstallThread(LPVOID unused) {
     int ok = f != INVALID_HANDLE_VALUE && WriteFile(f, b, (DWORD)len, &wr, NULL) && wr == len;
     if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
     free(b);
-    if (!ok) { DeleteFileW(newPath); updFail(L"Couldn't write the update next to the EXE — the folder may be write-protected."); return 0; }
+    if (!ok) { DeleteFileW(newPath); updFail(L"Couldn't save the update. Move the app to a folder you can write to, like Documents."); return 0; }
     /* pick a backup name that is free (or a stale one we can delete) */
     int chosen = 0;
     for (int slot = 0; slot < 64 && !chosen; slot++) {
@@ -889,13 +895,13 @@ static DWORD WINAPI InstallThread(LPVOID unused) {
         if (at == INVALID_FILE_ATTRIBUTES) chosen = 1;
         else if (DeleteFileW(oldPath)) chosen = 1;
     }
-    if (!chosen) { DeleteFileW(newPath); updFail(L"Couldn't clear an old backup next to the EXE."); return 0; }
+    if (!chosen) { DeleteFileW(newPath); updFail(L"Couldn't make room for the update. Try again."); return 0; }
     int moved = 0;
     for (int i = 0; i < 12 && !moved; i++) { if (MoveFileExW(exePath, oldPath, MOVEFILE_REPLACE_EXISTING)) moved = 1; else Sleep(120); }
-    if (!moved) { DeleteFileW(newPath); updFail(L"Couldn't move the running EXE aside — close other copies and retry, or the folder is write-protected."); return 0; }
+    if (!moved) { DeleteFileW(newPath); updFail(L"Couldn't swap in the update. Close any other copies of the app and try again."); return 0; }
     int placed = 0;
     for (int i = 0; i < 12 && !placed; i++) { if (MoveFileExW(newPath, exePath, MOVEFILE_REPLACE_EXISTING)) placed = 1; else Sleep(120); }
-    if (!placed) { MoveFileExW(oldPath, exePath, MOVEFILE_REPLACE_EXISTING); DeleteFileW(newPath); updFail(L"Couldn't put the new EXE in place; kept the current version."); return 0; }
+    if (!placed) { MoveFileExW(oldPath, exePath, MOVEFILE_REPLACE_EXISTING); DeleteFileW(newPath); updFail(L"Couldn't swap in the update, so your current version was kept."); return 0; }
     MoveFileExW(oldPath, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
     DeleteFileW(oldPath);
     PostMessageW(hMain, WM_UPDRESTART, 0, 0);
@@ -903,9 +909,11 @@ static DWORD WINAPI InstallThread(LPVOID unused) {
 }
 
 static void startInstall(void) {
-    if (updAvail != 1) { status(updAvail == 2 ? L"The new release has no .exe attached, so it can't auto-install." : L"No update to install."); return; }
-    if (busy()) { status(L"Stop recording/playing/typing before updating."); return; }
+    if (!updAvail) { status(L"No update to install right now."); return; }
+    if (busy()) { status(L"Stop recording, playing or typing before updating."); return; }
     if (InterlockedCompareExchange(&updBusy, 1, 0)) return;
+    updState = US_DOWNLOADING; updPct = 0; updDetail[0] = 0;
+    updSync();
     CloseHandle(CreateThread(NULL, 0, InstallThread, NULL, 0, NULL));
 }
 
@@ -924,30 +932,6 @@ static void restartUpdated(void) {
     }
 }
 
-static void updInfo(wchar_t *out, int n) {
-    wchar_t when[64] = L"never";
-    if (updChecked) {
-        wchar_t t[32];
-        GetTimeFormatEx(NULL, TIME_NOSECONDS, &updWhen, NULL, t, 32);
-        swprintf(when, 64, L"%s", t);
-    }
-    const wchar_t *lat = updLatest[0] ? updLatest : (updConn == CONN_CHECKING ? L"checking…" : L"unknown");
-    const wchar_t *note = updAvail == 1 ? L"  — update available!" : updAvail == 2 ? L"  — newer, but no .exe attached" :
-                          (updLatest[0] ? L"  — you're up to date" : L"");
-    swprintf(out, n,
-        L"Connection:  %s\n"
-        L"Installed:  v%s        Latest:  %s%s\n"
-        L"Source:  github.com/%s   ·   last checked %s",
-        updConnMsg[0] ? updConnMsg : L"Not checked yet", APP_VERSION_W, lat, note, updRepo, when);
-}
-
-static int connColor(void) {
-    if (updErr || updConn == CONN_OFFLINE || updConn == CONN_ERROR) return 0xe0483a;
-    if (updConn == CONN_ONLINE) return updAvail ? 0xf5c21a : 0x34c23a;
-    return 0x9aa8b8;
-}
-
-
 /* ---------- pages, layout, painting ---------- */
 
 enum { PG_MACRO, PG_INSTR, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1 };
@@ -955,7 +939,7 @@ static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Instruct", L"Editor", L"T
 static int curPage = PG_INSTR, tabHover = -1;
 
 static Canvas pageC[PG_N], backC;
-static HFONT hFont, hBold, hTitle, hSmall, hPrompt;
+static HFONT hFont, hBold, hTitle, hSmall, hPrompt, hHead;
 static HWND hoverBtn;
 static wchar_t statusText[512] = L"";
 static wchar_t curFile[MAX_PATH] = L"";
@@ -986,7 +970,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -995,8 +979,6 @@ static Tog tog[TG_N] = {
     { L"Humanizer",             PG_INSTR, 236, 218, 102, 1, 1 },
     { L"Typos",                 PG_INSTR, 342, 218,  78, 0, 1 },
     { L"Docs-safe",             PG_INSTR, 332, 280,  88, 0, 1 },
-    { L"Check on launch",       PG_UPDATE,  20, 296, 180, 0, 1 },
-    { L"Auto-install updates",  PG_UPDATE, 220, 296, 200, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1059,7 +1041,7 @@ static void renderPages(void) {
         glassPanel(c, 10, 8, 420, 32);
         if (p == PG_MACRO) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 146, 400, 212); }
         if (p == PG_INSTR || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
-        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 72, 400, 84); inset(c, 20, 164, 400, 126); }
+        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 104); }
         if (p == PG_TEST) { glassPanel(c, 10, 48, 420, 490); inset(c, 20, 90, 400, 104); inset(c, 20, 320, 400, 160); }
         if (p != PG_TEST) { glassPanel(c, 10, 378, 420, 112); glassPanel(c, 10, 498, 420, 40); }
         SetBkMode(dc, TRANSPARENT);
@@ -1068,10 +1050,7 @@ static void renderPages(void) {
             textAt(dc, hTitle, L"Instruct (auto-type)", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
             textAt(dc, hSmall, L"% fields: blank = default", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
-        if (p == PG_UPDATE) {
-            textAt(dc, hTitle, L"Updates", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"pulled from GitHub · works offline", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
-        }
+        if (p == PG_UPDATE) textAt(dc, hTitle, L"Updates", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
         if (p == PG_EDIT) {
             textAt(dc, hTitle, L"Macro Editor", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
             textAt(dc, hSmall, L"select a row to load it into the fields", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
@@ -1134,11 +1113,12 @@ static RECT tabRect(int i) { return RS(13 + i * 83, 12, 81, 24); }
 
 static void drawTabs(Canvas *c) {
     for (int i = 0; i < PG_N; i++) {
-        RECT r = tabRect(i);
+        RECT r = tabRect(i), tr = r;
+        if (i == PG_UPDATE) tr.right -= S(12);
         double x = r.left, y = r.top, w = r.right - r.left, h = r.bottom - r.top, rad = S(8);
         if (i == curPage) {
             gel(c, x, y, w, h, rad, &PAL_BLUE, 0, 0);
-            gelText(c->dc, TABNAME[i], r, &PAL_BLUE, 0);
+            gelText(c->dc, TABNAME[i], tr, &PAL_BLUE, 0);
         } else {
             rrFill(c, x, y, w, h, rad, 0xffffff, 0xd6eefc, i == tabHover ? 0.85 : 0.5, i == tabHover ? 0.7 : 0.35);
             if (i == tabHover) rrGlow(c, x, y, w, h, rad, x + w / 2, y + h * 1.1, w * 0.5, 0x86e8ff, 0.6);
@@ -1147,11 +1127,14 @@ static void drawTabs(Canvas *c) {
             SetBkMode(c->dc, TRANSPARENT);
             SelectObject(c->dc, hBold);
             SetTextColor(c->dc, NAVY);
-            DrawTextW(c->dc, TABNAME[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(c->dc, TABNAME[i], -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        if (i == PG_UPDATE && updAvail) {
-            disc(c, r.right - S(7), r.top + S(6), S(4), 0xff8a1e, 1, 1);
-            disc(c, r.right - S(8), r.top + S(5), S(3) / 2.0, 0xffffff, 0.8, 1);
+        if (i == PG_UPDATE) {
+            double lx = r.right - S(12), ly = (r.top + r.bottom) / 2.0, lr = S(4);
+            disc(c, lx, ly, lr * 2.2, updLight(), 0.22, lr * 1.2);
+            disc(c, lx, ly + S(1), lr + 1, 0x0a2a4a, 0.28, 1.5);
+            disc(c, lx, ly, lr, updLight(), 1, 1);
+            disc(c, lx - lr * 0.3, ly - lr * 0.38, lr * 0.45, 0xffffff, 0.85, lr * 0.35);
         }
     }
 }
@@ -1225,6 +1208,44 @@ static const wchar_t *PROMPTS[] = {
 };
 #define NPROMPTS (int)(sizeof PROMPTS / sizeof PROMPTS[0])
 
+static void drawUpdatePage(Canvas *c) {
+    static const wchar_t *UHEAD[] = { L"Checking for updates…", L"You're up to date", L"Update available", L"Downloading update…",
+                                      L"Installing update…", L"You're offline", L"Couldn't check for updates", L"Update didn't install" };
+    int st = (int)updState;
+    double cx = S(52), cy = S(110), r = S(15);
+    disc(c, cx, cy, r * 2.0, updLight(), 0.14, r * 1.2);
+    disc(c, cx, cy + S(2), r + S(1), 0x0a2a4a, 0.22, S(3));
+    disc(c, cx, cy, r, updLight(), 1, 1);
+    disc(c, cx, cy + r * 0.38, r * 0.72, 0xffffff, 0.22, r * 0.55);
+    disc(c, cx - r * 0.28, cy - r * 0.4, r * 0.42, 0xffffff, 0.8, r * 0.32);
+    ring(c, cx, cy, r, 0xffffff, 0.75, 1.2);
+    HDC dc = c->dc;
+    textAt(dc, hHead, UHEAD[st], 82, 82, 330, 28, NAVY, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    wchar_t v[96];
+    if (updAvail && st != US_CURRENT) swprintf(v, 96, L"Version %s  →  %s", APP_VERSION_W, updLatest);
+    else swprintf(v, 96, L"Version %s", APP_VERSION_W);
+    textAt(dc, hFont, v, 82, 110, 330, 18, HINT, DT_LEFT | DT_SINGLELINE);
+    if (st == US_DOWNLOADING || st == US_INSTALLING) {
+        int pct = st == US_INSTALLING ? 100 : (int)updPct;
+        double x = S(82), y = S(138), w = S(282), h = S(12);
+        rrFill(c, x, y, w, h, h / 2, 0xd9e6f2, 0xf7fbff, 1, 1);
+        rrStroke(c, x, y, w, h, h / 2, 0x2b7fc4, 0.4, 1, 0);
+        if (pct > 0) {
+            double fw = fmax(h, w * pct / 100.0);
+            rrFill(c, x, y, fw, h, h / 2, 0x86d6ff, 0x1c7fd4, 1, 1);
+            rrGloss(c, x, y, fw, h, h / 2, 0.5, 0.65, 0.12);
+        }
+        wchar_t p[16]; swprintf(p, 16, L"%d%%", pct);
+        textAt(dc, hFont, p, 372, 135, 44, 18, HINT, DT_LEFT | DT_SINGLELINE);
+    } else {
+        const wchar_t *d = updDetail[0] ? updDetail : st == US_AVAILABLE ? L"Takes a few seconds. Your settings and macros stay put." : L"";
+        if (d[0]) textAt(dc, hSmall, d, 82, 132, 330, 32, HINT, DT_LEFT | DT_WORDBREAK);
+    }
+    wchar_t hd[64];
+    if (updLatest[0]) swprintf(hd, 64, L"What's new in %s", updLatest); else wcscpy(hd, L"What's new");
+    textAt(dc, hBold, hd, 24, 172, 392, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+}
+
 static void paintMain(HDC hdc) {
     Canvas *src = &pageC[curPage];
     memcpy(backC.px, src->px, (size_t)src->w * src->h * 4);
@@ -1236,15 +1257,7 @@ static void paintMain(HDC hdc) {
         wchar_t info[1024]; macroInfo(info, 1024);
         textAt(dc, hFont, info, 32, 154, 378, 200, NAVY, DT_LEFT | DT_WORDBREAK);
     }
-    if (curPage == PG_UPDATE) {
-        wchar_t info[600]; updInfo(info, 600);
-        disc(&backC, S(33), S(85), S(5), connColor(), 1, 1);
-        disc(&backC, S(32), S(83), S(2), 0xffffff, 0.7, 1);
-        textAt(dc, hFont, info, 46, 78, 368, 74, NAVY, DT_LEFT | DT_WORDBREAK);
-        wchar_t hd[96];
-        if (updLatest[0]) swprintf(hd, 96, L"What's new in %s", updLatest); else wcscpy(hd, L"What's new");
-        textAt(dc, hBold, hd, 30, 170, 380, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-    }
+    if (curPage == PG_UPDATE) drawUpdatePage(&backC);
     if (curPage == PG_TEST) {
         textAt(dc, hPrompt, PROMPTS[promptIdx], 30, 97, 380, 92, NAVY, DT_LEFT | DT_WORDBREAK);
         textAt(dc, hFont, testResult, 32, 330, 376, 144, NAVY, DT_LEFT | DT_WORDBREAK);
@@ -1271,7 +1284,7 @@ static void drawButton(DRAWITEMSTRUCT *d) {
     UINT id = d->CtlID;
     const BtnPal *p = (id == ID_REC || id == ID_EDEL || id == ID_PDEL || (id == ID_KBLOCK && kbBlocked) || (id == ID_MAGIC && magicOn)) ? &PAL_RED :
                       id == ID_MAGIC ? &PAL_PURPLE :
-                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || id == ID_UINSTALL) ? &PAL_GREEN : &PAL_BLUE;
+                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || (id == ID_UACTION && updAvail)) ? &PAL_GREEN : &PAL_BLUE;
     int pressed = (d->itemState & ODS_SELECTED) != 0;
     gel(c, 1, 1, w - 2, h - 3, fmin((h - 3) / 2.0, S(9)), p, d->hwndItem == hoverBtn, pressed);
     wchar_t t[96]; GetWindowTextW(d->hwndItem, t, 96);
@@ -1471,6 +1484,22 @@ static void stopAll(void) {
     stopFlag = 1;
     magicStop(0);
     if (recording) stopRec();
+}
+
+static int rewindPending;
+static void rewindType(void) {
+    HWND te = GetDlgItem(hMain, ID_TEXT);
+    resetResume();
+    CHARRANGE cr = { 0, 0 };
+    SendMessageW(te, EM_EXSETSEL, 0, (LPARAM)&cr);
+    SendMessageW(te, WM_VSCROLL, SB_TOP, 0);
+    SetFocus(te);
+    status(L"Back at the start — Type begins from the top.");
+}
+static void restartType(void) {
+    if (magicOn) magicStop(0);
+    if (typing) { rewindPending = 1; stopFlag = 1; }
+    else rewindType();
 }
 
 /* ---------- Vista glass frame ---------- */
@@ -2310,11 +2339,8 @@ static void buildUI(void) {
     BTN(L"Save…", 364, 314, 56, 28, ID_ESAVE);
 
     buildPage = PG_UPDATE;
-    HWND nb = mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 190, 388, 94, ID_UNOTES);
-    (void)nb;
-    BTN(L"Check now", 20, 326, 110, 28, ID_UCHECK);
-    BTN(L"Install update", 134, 326, 140, 28, ID_UINSTALL);
-    BTN(L"Open GitHub page", 278, 326, 142, 28, ID_UPAGE);
+    mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 388, 94, ID_UNOTES);
+    BTN(L"Check for updates", 130, 312, 180, 32, ID_UACTION);
 
     buildPage = PG_TEST;
     HWND ed = mk(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 20, 202, 400, 110, ID_TEDIT);
@@ -2335,14 +2361,15 @@ static void buildUI(void) {
 }
 
 static void makeFonts(void) {
-    HFONT old[6] = { hFont, hBold, hTitle, hSmall, hPrompt, hBtnSmall };
+    HFONT old[7] = { hFont, hBold, hTitle, hSmall, hPrompt, hBtnSmall, hHead };
     hFont   = CreateFontW(-S(13), 0, 0, 0, FW_NORMAL,   0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     hBold   = CreateFontW(-S(13), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     hTitle  = CreateFontW(-S(14), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     hSmall  = CreateFontW(-S(11), 0, 0, 0, FW_NORMAL,   1, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     hPrompt = CreateFontW(-S(15), 0, 0, 0, FW_NORMAL,   0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     hBtnSmall = CreateFontW(-S(11), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-    for (int i = 0; i < 6; i++) if (old[i]) DeleteObject(old[i]);
+    hHead   = CreateFontW(-S(20), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    for (int i = 0; i < 7; i++) if (old[i]) DeleteObject(old[i]);
 }
 
 static void makeCanvases(void) {
@@ -2383,7 +2410,7 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"UpdateCheck", L"UpdateAuto" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe" };
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -2445,13 +2472,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_CLEAR: if (!busy()) { clearEv(); curFile[0] = 0; idleStatus(); } break;
         case ID_HKAPPLY: applyHotkeys(1); break;
         case ID_TNEW: newPrompt(1); break;
-        case ID_UCHECK: startCheck(); break;
-        case ID_UINSTALL: startInstall(); break;
-        case ID_UPAGE: {
-            wchar_t url[600];
-            if (updPage[0]) wcscpy(url, updPage); else swprintf(url, 600, L"https://github.com/%s", updRepo);
-            ShellExecuteW(NULL, L"open", url, NULL, NULL, SW_SHOWNORMAL);
-        } break;
+        case ID_UACTION: if (!updBusy) { if (updAvail) startInstall(); else startCheck(); } break;
         case ID_KBLOCK: toggleKb(); break;
         case ID_MAGIC: if (magicOn) magicStop(0); else magicStart(); break;
         case ID_EUPD: case ID_EINS: case ID_EDEL: case ID_EUP: case ID_EDOWN: case ID_ESCALEGO: case ID_ESTRIP:
@@ -2467,7 +2488,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 }
             }
             break;
-        case ID_TRESTART: if (!busy()) { resetResume(); startType(); } break;
+        case ID_TRESTART: restartType(); break;
         case ID_TCLEAR:
             if (!busy()) { SetWindowTextW(GetDlgItem(h, ID_TEXT), L""); hlPrev = -1; resetResume(); idleStatus(); }
             break;
@@ -2545,10 +2566,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DONE:
         if (!typing) SendMessageW(GetDlgItem(h, ID_TEXT), EM_SETREADONLY, FALSE, 0);
+        if (rewindPending && !typing) { rewindPending = 0; rewindType(); return 0; }
         setTypeLabel();
         if (!busy()) {
             if (resumeIdx > 0 && resumeText)
-                status(L"Paused at character %d of %d — Resume picks up right there, Restart starts over.",
+                status(L"Paused at character %d of %d — Resume picks up right there, Restart goes back to the start.",
                        resumeIdx, (int)wcslen(resumeText));
             else idleStatus();
         }
@@ -2557,18 +2579,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_KBTOGGLE: toggleKb(); return 0;
     case WM_MAGIC: magicKey((int)wp); return 0;
     case WM_UPDCHECKED:
-        fillNotes();
-        InvalidateRect(h, NULL, FALSE);
-        if (updAvail == 1) {
-            if (tog[TG_UAUTO].on && !busy()) startInstall();
-            else status(L"Update %s is available — open the Update tab to install it.", updLatest);
-        }
+        if (lp) { free(updNotes); updNotes = (wchar_t *)lp; }
+        updSync();
+        if (updAvail) status(L"Update %s is ready — open the Update tab to install it.", updLatest);
         return 0;
+    case WM_UPDPROGRESS: InvalidateRect(h, NULL, FALSE); return 0;
     case WM_UPDFAIL: {
         wchar_t *m = (wchar_t *)lp;
-        updErr = 1;
-        _snwprintf(updConnMsg, 159, L"%s  Try restarting the macro.", m); updConnMsg[159] = 0;
-        status(L"%s  Try restarting the macro.", m); free(m); InvalidateRect(h, NULL, FALSE);
+        updState = US_FAILED;
+        wcsncpy(updDetail, m, 199); updDetail[199] = 0;
+        status(L"%s", m); free(m); updSync();
     } return 0;
     case WM_UPDRESTART: restartUpdated(); return 0;
     case WM_DESTROY:
@@ -2652,13 +2672,12 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     loadSettings();
     applyHotkeys(0);
     newPrompt(0);
-    fillNotes();
     showPage(PG_INSTR);
     idleStatus();
     setKbLabel();
     hkGuard = SetWindowsHookExW(WH_KEYBOARD_LL, GuardProc, GetModuleHandleW(NULL), 0);
     if (justUpdated) status(L"Updated to v%s — enjoy!", APP_VERSION_W);
-    if (tog[TG_UCHECK].on) startCheck();
+    startCheck();
     ShowWindow(hFrame, show);
 
     MSG msg;
