@@ -22,6 +22,7 @@
 
 #define WM_STATUS (WM_APP + 1)
 #define WM_DONE   (WM_APP + 2)
+#define WM_GOBREAK (WM_APP + 12)
 #define WM_HL     (WM_APP + 3)
 #define HL(i) PostMessageW(hMain, WM_HL, (WPARAM)(INT_PTR)(i), 0)
 #define HLJ(j, i) do { if (!(j)->clip) HL(i); } while (0)
@@ -35,7 +36,7 @@ typedef struct { DWORD delay; int type, a, b, c; wchar_t *text; } Ev;
 
 enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID_SPEED, ID_MOVES,
        ID_TEXT = 201, ID_FIXWPM, ID_FIXMS, ID_HUMAN, ID_WPM, ID_MS, ID_DELAY, ID_TYPOS, ID_TYPE, ID_TSTOP,
-       ID_TYPOP, ID_BURSTP, ID_PAUSEP,
+       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
        ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
@@ -54,6 +55,7 @@ static HWND hMain, hFrame, hBtn[HK_N], hHk[HK_N];
 static HHOOK hkKb, hkMs;
 static Ev *ev; static int nev, cap;
 static volatile LONG recording, playing, typing, stopFlag;
+static volatile LONG goSkip, inBreak;
 static DWORD lastT, lastMoveT;
 static int recMoves = 1, playReps = 1;
 static double playSpeed = 1.0;
@@ -253,6 +255,7 @@ typedef struct {
     wchar_t *text; int mode, wpm, ms, delay, typos;
     double typoP, burstP, pauseP;
     int docsSafe, start, pending, stopAt, stopExtra, clip;
+    int autoGo, chunk; double brkMin, brkMax;
 } TypeJob;
 
 static volatile int resumeIdx, resumePending;
@@ -314,7 +317,7 @@ static int lagLength(void) {
 static void humanType(TypeJob *j) {
     HState s = { 60000.0 / (j->wpm * 5.0), 1.0, j->burstP / 100.0, j->pauseP / 100.0, 0 };
     double typoP = j->typos ? j->typoP / 100.0 : 0;
-    int len = (int)wcslen(j->text), safeUntil = -1, extra = 0;
+    int len = (int)wcslen(j->text), safeUntil = -1, extra = 0, sinceBreak = 0;
     rs ^= GetTickCount64() * 2654435761ULL;
     j->stopAt = j->start; j->stopExtra = 0;
 
@@ -352,6 +355,22 @@ static void humanType(TypeJob *j) {
         HLJ(j, i);
         sendChar(c);
         j->stopAt = i + 1;
+        if (j->autoGo && i + 1 < len && ++sinceBreak >= j->chunk && (c == L' ' || c == L'\n')) {
+            sinceBreak = 0;
+            double endT = nowMs() + rrange(j->brkMin, j->brkMax);
+            InterlockedExchange(&goSkip, 0);
+            PostMessageW(hMain, WM_GOBREAK, 1, 0);
+            while (!stopFlag && !goSkip) {
+                double rem = endT - nowMs(); if (rem <= 0) break;
+                int secs = (int)(rem / 1000.0 + 0.5);
+                status(L"Reading break — %d:%02d left · press GO to resume now", secs / 60, secs % 60);
+                waitMs(500);
+            }
+            PostMessageW(hMain, WM_GOBREAK, 0, 0);
+            if (stopFlag) break;
+            InterlockedExchange(&goSkip, 0);
+            status(L"Resuming…");
+        }
         double p = hPause(&s, c);
         if (p > 0 && !waitMs(p)) break;
     }
@@ -665,8 +684,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.12"
-#define APP_VERSION_W L"1.14.12"
+#define APP_VERSION   "1.14.13"
+#define APP_VERSION_W L"1.14.13"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -964,8 +983,8 @@ static void restartUpdated(void) {
 
 /* ---------- pages, layout, painting ---------- */
 
-enum { PG_MACRO, PG_INSTR, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1 };
-static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Instruct", L"Editor", L"Test", L"Update" };
+enum { PG_MACRO, PG_INSTR, PG_WINLAN, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1, PG_TYPING = -2 };
+static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Instruct", L"Winlan", L"Editor", L"Test", L"Update" };
 static int curPage = PG_MACRO, tabHover = -1;
 
 static Canvas pageC[PG_N], backC;
@@ -1000,33 +1019,35 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
     { L"Fixed WPM",             PG_INSTR,  20, 218, 100, 1, 0 },
-    { L"Fixed ms/char",         PG_INSTR, 122, 218, 112, 1, 0 },
-    { L"Humanizer",             PG_INSTR, 236, 218, 102, 1, 1 },
-    { L"Typos",                 PG_INSTR, 342, 218,  78, 0, 1 },
-    { L"Docs-safe",             PG_INSTR, 332, 280,  88, 0, 1 },
+    { L"Fixed ms/char",         PG_INSTR, 150, 218, 112, 1, 0 },
+    { L"Humanizer",             PG_WINLAN, 20, 218, 110, 1, 1 },
+    { L"Typos",                 PG_WINLAN,160, 218,  78, 0, 1 },
+    { L"Docs-safe",             PG_INSTR,  20, 283,  88, 0, 1 },
     { L"Auto-check for updates", PG_UPDATE,  20, 280, 196, 0, 1 },
     { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
+    { L"Auto-go",               PG_WINLAN,  20, 283,  84, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
 static const Lbl LBLS[] = {
     { L"Repeat (0 = ∞):", PG_MACRO, 20, 115, 92 }, { L"Speed ×", PG_MACRO, 166, 115, 46 },
     { L"WPM:", PG_INSTR, 20, 251, 40 }, { L"ms/char:", PG_INSTR, 112, 251, 60 }, { L"Start delay (s):", PG_INSTR, 226, 251, 102 },
-    { L"Typo %:", PG_INSTR, 20, 283, 52 }, { L"Burst %:", PG_INSTR, 116, 283, 58 }, { L"Pause %:", PG_INSTR, 220, 283, 60 },
+    { L"Typo %:", PG_WINLAN, 20, 253, 52 }, { L"Burst %:", PG_WINLAN, 116, 253, 58 }, { L"Pause %:", PG_WINLAN, 220, 253, 60 },
     { L"Record:", PG_GLOBAL, 20, 403, 62 }, { L"Play:", PG_GLOBAL, 222, 403, 62 },
     { L"Auto-type:", PG_GLOBAL, 20, 431, 62 }, { L"Stop all:", PG_GLOBAL, 222, 431, 62 },
     { L"Clipboard:", PG_GLOBAL, 20, 459, 62 },
-    { L"Preset:", PG_INSTR, 20, 191, 44 },
+    { L"Preset:", PG_WINLAN, 20, 191, 44 },
+    { L"Chunk:", PG_WINLAN, 108, 286, 42 }, { L"Break:", PG_WINLAN, 200, 286, 40 }, { L"to", PG_WINLAN, 274, 286, 14 }, { L"min", PG_WINLAN, 322, 286, 28 },
     { L"Delay:", PG_EDIT, 20, 251, 40 }, { L"Event:", PG_EDIT, 124, 251, 40 }, { L"Args:", PG_EDIT, 266, 251, 32 },
     { L"Scale delays ×", PG_EDIT, 20, 319, 88 },
 };
 
-static int onPage(int tag, int p) { return tag == p || (tag == PG_GLOBAL && p != PG_TEST); }
+static int onPage(int tag, int p) { return tag == p || (tag == PG_GLOBAL && p != PG_TEST) || (tag == PG_TYPING && (p == PG_INSTR || p == PG_WINLAN)); }
 
 static void renderSky(Canvas *c) {
     int W = c->w, H = c->h;
@@ -1072,15 +1093,17 @@ static void renderPages(void) {
         HDC dc = c->dc;
         glassPanel(c, 10, 8, 420, 32);
         if (p == PG_MACRO) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 146, 400, 212); }
-        if (p == PG_INSTR || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
+        if (p == PG_INSTR || p == PG_WINLAN || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
         if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 80); }
         if (p == PG_TEST) { glassPanel(c, 10, 48, 420, 490); inset(c, 20, 90, 400, 104); inset(c, 20, 320, 400, 160); }
         if (p != PG_TEST) { glassPanel(c, 10, 378, 420, 112); glassPanel(c, 10, 498, 420, 40); }
         SetBkMode(dc, TRANSPARENT);
         if (p == PG_MACRO) textAt(dc, hTitle, L"Macro Recorder", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-        if (p == PG_INSTR) {
+        if (p == PG_INSTR)
             textAt(dc, hTitle, L"Instruct (auto-type)", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"% fields: blank = default", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+        if (p == PG_WINLAN) {
+            textAt(dc, hTitle, L"Winlan (humanizer)", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"blank = default", 300, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
         if (p == PG_UPDATE) textAt(dc, hTitle, L"Updates", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
         if (p == PG_EDIT) {
@@ -1093,7 +1116,7 @@ static void renderPages(void) {
             textAt(dc, hTitle, L"Typing Test", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
             textAt(dc, hSmall, L"Type the prompt exactly like you normally would — mistakes and fixes are part of the test.",
                    20, 70, 400, 16, HINT, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"Apply fills WPM, Typo %, Burst % and Pause % in Instruct and switches to Humanizer. Paste is off here.",
+            textAt(dc, hSmall, L"Apply fills the Winlan humanizer (Typo %, Burst %, Pause %) and switches to it. Paste is off here.",
                    20, 520, 400, 16, HINT, DT_LEFT | DT_SINGLELINE);
         }
         if (p != PG_TEST) {
@@ -1141,7 +1164,7 @@ static void gelText(HDC dc, const wchar_t *t, RECT tr, const BtnPal *p, int pres
     DrawTextW(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-static RECT tabRect(int i) { return RS(13 + i * 83, 12, 81, 24); }
+static RECT tabRect(int i) { return RS(13 + i * 69, 12, 66, 24); }
 
 static void drawTabs(Canvas *c) {
     for (int i = 0; i < PG_N; i++) {
@@ -1318,7 +1341,7 @@ static void drawButton(DRAWITEMSTRUCT *d) {
     UINT id = d->CtlID;
     const BtnPal *p = (id == ID_REC || id == ID_EDEL || id == ID_PDEL || (id == ID_KBLOCK && kbBlocked) || (id == ID_MAGIC && magicOn)) ? &PAL_RED :
                       id == ID_MAGIC ? &PAL_PURPLE :
-                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || (id == ID_UACTION && updAvail)) ? &PAL_GREEN : &PAL_BLUE;
+                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || id == ID_GO || (id == ID_UACTION && updAvail)) ? &PAL_GREEN : &PAL_BLUE;
     int pressed = (d->itemState & ODS_SELECTED) != 0;
     gel(c, 1, 1, w - 2, h - 3, fmin((h - 3) / 2.0, S(9)), p, d->hwndItem == hoverBtn, pressed);
     wchar_t t[96]; GetWindowTextW(d->hwndItem, t, 96);
@@ -1505,10 +1528,16 @@ static void startType(void) {
     j->typoP = getPct(ID_TYPOP, DEF_TYPO);
     j->burstP = getPct(ID_BURSTP, DEF_BURST);
     j->pauseP = getPct(ID_PAUSEP, DEF_PAUSE);
+    j->autoGo = tog[TG_AUTOGO].on && j->mode == ID_HUMAN;
+    j->chunk = (int)getDbl(ID_CHUNK, 1500); if (j->chunk < 50) j->chunk = 50;
+    { double a = getDbl(ID_BRKMIN, 5), b = getDbl(ID_BRKMAX, 35);
+      if (a < 0) a = 0; if (b < a) b = a;
+      j->brkMin = a * 60000.0; j->brkMax = b * 60000.0; }
     resetTextFormat(te);
     hlPrev = -1;
     if (j->start) highlight(j->start);
     SendMessageW(te, EM_SETREADONLY, TRUE, 0);
+    InterlockedExchange(&goSkip, 0); InterlockedExchange(&inBreak, 0);
     stopFlag = 0; typing = 1;
     CloseHandle(CreateThread(NULL, 0, TypeThread, j, 0, NULL));
 }
@@ -1974,7 +2003,7 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             else { capHover = -1; ShowWindow(h, SW_MINIMIZE); }
         }
     } return 0;
-    case WM_SETFOCUS: SetFocus(GetDlgItem(hMain, curPage == PG_TEST ? ID_TEDIT : curPage == PG_INSTR ? ID_TEXT : ID_REC)); return 0;
+    case WM_SETFOCUS: SetFocus(GetDlgItem(hMain, curPage == PG_TEST ? ID_TEDIT : (curPage == PG_INSTR || curPage == PG_WINLAN) ? ID_TEXT : ID_REC)); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
@@ -2568,9 +2597,10 @@ static void showPage(int p) {
     curPage = p;
     hoverBtn = NULL;
     for (int i = 0; i < nctl; i++) ShowWindow(ctls[i].h, onPage(ctls[i].page, p) ? SW_SHOWNA : SW_HIDE);
+    ShowWindow(GetDlgItem(hMain, ID_GO), (p == PG_WINLAN && inBreak) ? SW_SHOW : SW_HIDE);
     InvalidateRect(hMain, NULL, FALSE);
     if (p == PG_TEST) SetFocus(GetDlgItem(hMain, ID_TEDIT));
-    else if (p == PG_INSTR) SetFocus(GetDlgItem(hMain, ID_TEXT));
+    else if (p == PG_INSTR || p == PG_WINLAN) SetFocus(GetDlgItem(hMain, ID_TEXT));
     else if (p == PG_EDIT) { refreshList(); SetFocus(lv()); }
     else SetFocus(GetDlgItem(hMain, ID_REC));
 }
@@ -2588,7 +2618,8 @@ static void buildUI(void) {
     NUM(L"1", 112, 112, 42, ID_REPEAT);
     NUM(L"1.0", 212, 112, 42, ID_SPEED);
 
-    buildPage = PG_INSTR;
+    /* shared by Instruct + Winlan: the text box and the Type/Stop/Restart/Clear row */
+    buildPage = PG_TYPING;
     HWND te = mk(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
                  20, 70, 400, 110, ID_TEXT);
     SendMessageW(te, EM_EXLIMITTEXT, 0, 0x7FFFFFFF);
@@ -2596,19 +2627,33 @@ static void buildUI(void) {
     SendMessageW(te, EM_SETTARGETDEVICE, 0, 0);
     resetTextFormat(te);
     SetWindowSubclass(te, RichSub, 2, 0);
-    mk(0, L"COMBOBOX", L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_SORT, 66, 188, 170, 200, ID_PRESET);
-    BTN(L"Save preset", 240, 186, 88, 26, ID_PSAVE);
-    BTN(L"Delete", 332, 186, 88, 26, ID_PDEL);
+
+    /* Instruct: fixed-rate typing + Magic */
+    buildPage = PG_INSTR;
     NUM(L"100", 62, 248, 44, ID_WPM);
     NUM(L"50", 174, 248, 44, ID_MS);
     NUM(L"3", 330, 248, 40, ID_DELAY);
-    NUM(L"1.4", 74, 280, 38, ID_TYPOP);
-    NUM(L"34", 176, 280, 38, ID_BURSTP);
-    NUM(L"14", 282, 280, 38, ID_PAUSEP);
+
+    /* Winlan: the humanizer — presets + typo/burst/pause */
+    buildPage = PG_WINLAN;
+    mk(0, L"COMBOBOX", L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_SORT, 66, 188, 170, 200, ID_PRESET);
+    BTN(L"Save preset", 240, 186, 88, 26, ID_PSAVE);
+    BTN(L"Delete", 332, 186, 88, 26, ID_PDEL);
+    NUM(L"1.4", 74, 250, 38, ID_TYPOP);
+    NUM(L"34", 176, 250, 38, ID_BURSTP);
+    NUM(L"14", 282, 250, 38, ID_PAUSEP);
+    NUM(L"1500", 150, 283, 44, ID_CHUNK);
+    NUM(L"5", 242, 283, 28, ID_BRKMIN);
+    NUM(L"35", 290, 283, 28, ID_BRKMAX);
+    BTN(L"GO", 340, 314, 80, 30, ID_GO);
+
+    buildPage = PG_TYPING;
     hBtn[HK_TYPE] = BTN(L"Type", 20, 314, 100, 30, ID_TYPE);
     hBtn[HK_STOP] = BTN(L"Stop", 124, 314, 76, 30, ID_TSTOP);
     BTN(L"Restart", 204, 314, 70, 30, ID_TRESTART);
     BTN(L"Clear", 278, 314, 58, 30, ID_TCLEAR);
+
+    buildPage = PG_INSTR;
     BTN(L"Magic", 340, 314, 80, 30, ID_MAGIC);
     SendMessageW(te, EM_SETEVENTMASK, 0, ENM_CHANGE);
 
@@ -2710,8 +2755,9 @@ static void rescaleAll(void) {
 static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
+    { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo" };
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -2738,7 +2784,7 @@ static void applyTest(void) {
     swprintf(b, 32, L"%.0f", resBurst); SetDlgItemTextW(hMain, ID_BURSTP, b);
     swprintf(b, 32, L"%.0f", resPause); SetDlgItemTextW(hMain, ID_PAUSEP, b);
     tog[TG_FIXWPM].on = tog[TG_FIXMS].on = 0; tog[TG_HUMAN].on = 1; tog[TG_TYPOS].on = 1;
-    showPage(PG_INSTR);
+    showPage(PG_WINLAN);
     status(L"Applied your typing profile to the Humanizer: %.0f WPM · typo %.1f%% · burst %.0f%% · pause %.0f%%",
            resWpm, resTypo, resBurst, resPause);
 }
@@ -2814,6 +2860,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_STOP: stopRec(); break;
         case ID_PLAY: startPlay(); break;
         case ID_TYPE: startType(); break;
+        case ID_GO: InterlockedExchange(&goSkip, 1); break;
         case ID_TSTOP: stopAll(); break;
         case ID_CLEAR: if (!busy()) { clearEv(); curFile[0] = 0; idleStatus(); } break;
         case ID_HKAPPLY: applyHotkeys(1); break;
@@ -2909,6 +2956,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         wcsncpy(statusText, (wchar_t *)lp, 511); free((void *)lp);
         if (!recording && curPage == PG_EDIT) refreshList();
         InvalidateRect(h, NULL, FALSE);
+        return 0;
+    case WM_GOBREAK:
+        InterlockedExchange(&inBreak, (LONG)wp);
+        ShowWindow(GetDlgItem(h, ID_GO), (wp && curPage == PG_WINLAN) ? SW_SHOW : SW_HIDE);
         return 0;
     case WM_DONE:
         if (!typing) SendMessageW(GetDlgItem(h, ID_TEXT), EM_SETREADONLY, FALSE, 0);
