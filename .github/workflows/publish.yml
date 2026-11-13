@@ -1,0 +1,39 @@
+name: Publish Frutiger Astro
+
+# Click "Run workflow" on the Actions tab, type a version + note, and this
+# builds the EXE and publishes it to the production channel on GitHub's own
+# servers. No local Git, Python, or Zig needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (e.g. 1.14.10)"
+        required: true
+      notes:
+        description: "What's new (one line, shown to users)"
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ziglang
+      - name: Set up git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main
+      - name: Publish
+        env:
+          VER: ${{ github.event.inputs.version }}
+          NOTE: ${{ github.event.inputs.notes }}
+        run: python faup.py promote "$VER" "$NOTE"
