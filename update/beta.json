@@ -1,0 +1,6 @@
+{
+  "version": "1.14.8",
+  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/5f71134a183609943e43390f5ab3c700c89b4e04/update/AstroBeta.exe",
+  "sha256": "837aa1d8ce1bef6bce1a4fa968933de57341f67fe0840cbec2578873ea3d1889",
+  "notes": "1.14.8\n- First Astro Beta build — local test channel, no activation code\n- Same features as production minus the gate and telemetry"
+}
