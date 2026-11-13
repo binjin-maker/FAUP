@@ -1,6 +1,6 @@
 {
-  "version": "1.14.6",
-  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/9a331eb18de74bf0fe7a47be561684e7ccf1c8ad/update/FrutigerAstro.exe",
-  "sha256": "9482c7fda6e8eb7529066744e1dd603a8aed487b82e234cb2f604081956491e2",
-  "notes": "1.14.6\n- First release from FAUP: updates now come from binjin-maker/FAUP\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
+  "version": "1.14.7",
+  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/7d19e3478cba3b28b6be783e6092fea6cd0d4899/update/FrutigerAstro.exe",
+  "sha256": "af1d732698061776030362c44dc0f549990431bc65ec7dc803866a56b4024bbc",
+  "notes": "1.14.7\n- Simpler Update tab: a status light, your version and how the update is going\n- A little status light on the Update tab button\n- Restart now stops typing and jumps back to the start instead of retyping\n\n1.14.6\n- Updates now install right from the Update tab\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
 }
