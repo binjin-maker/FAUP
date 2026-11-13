@@ -398,7 +398,7 @@ static DWORD WINAPI ServerThread(LPVOID arg) {
 #define IDC_RCCOPY 109
 
 static HFONT g_ui, g_hdr, g_small;
-static HWND g_list, g_nick, g_annedit, g_target, g_rcver, g_rcmsg, g_rceta;
+static HWND g_list, g_nick, g_annedit, g_target, g_rcver, g_rcmsg, g_rceta, g_sent;
 static int g_sel = -1;   /* instance index of the selected copy, kept even when the list loses focus */
 
 static HWND mkctl(HWND h, HINSTANCE hi, const wchar_t *cls, const wchar_t *txt, DWORD st, DWORD ex, int x, int y, int w, int hh, int id) {
@@ -470,6 +470,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         g_annedit = mkctl(h, hi, L"EDIT", L"", ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, 14, 376, 420, 24, IDC_ANN);
         g_target = mkctl(h, hi, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 0, 442, 376, 160, 240, IDC_TARGET);
         mkctl(h, hi, L"BUTTON", L"Send", BS_PUSHBUTTON | WS_TABSTOP, 0, 610, 375, 108, 26, IDC_SEND);
+        g_sent = mkctl(h, hi, L"STATIC", L"", SS_LEFT, 0, 610, 403, 120, 14, 0);
         mkctl(h, hi, L"STATIC", L"Emergency recall - builds the authenticated faup.py command to run in your FAUP clone:", SS_LEFT, 0, 14, 414, 700, 18, 0);
         mkctl(h, hi, L"STATIC", L"Version:", SS_LEFT, 0, 14, 440, 54, 18, 0);
         g_rcver = mkctl(h, hi, L"EDIT", L"", 0, WS_EX_CLIENTEDGE, 70, 438, 80, 24, IDC_RCVER);
@@ -481,7 +482,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         SetTimer(h, 1, 2000, NULL);
         refreshUI(h);
     } return 0;
-    case WM_TIMER: refreshUI(h); return 0;
+    case WM_TIMER:
+        if (wp == 2) { KillTimer(h, 2); SetWindowTextW(g_sent, L""); return 0; }
+        refreshUI(h); return 0;
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
         if (nh->idFrom == IDC_LIST && nh->code == LVN_ITEMCHANGED) {
@@ -535,7 +538,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 if (g_na < MAXA) { Ann *a = &g_ann[g_na++]; memset(a, 0, sizeof *a); a->used = 1; a->id = ++g_seq; strncpy(a->target, target, 39); strncpy(a->text, ta, 299); a->created = now_s(); save_locked(); }
                 LeaveCriticalSection(&g_lock);
                 SetWindowTextW(g_annedit, L"");
-                MessageBoxW(h, L"Sent. Copies that report to this server show it until the user dismisses it.", L"Frutiger Servers", MB_OK | MB_ICONINFORMATION);
+                SetWindowTextW(g_sent, L"Message sent!");
+                SetTimer(h, 2, 3000, NULL);
             }
             return 0;
         }
@@ -551,7 +555,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             return 0;
         }
         break;
-    case WM_CTLCOLORSTATIC: SetBkColor((HDC)wp, RGB(238, 246, 251)); SetBkMode((HDC)wp, TRANSPARENT); return (LRESULT)GetStockObject(NULL_BRUSH);
+    case WM_CTLCOLORSTATIC:
+        SetBkColor((HDC)wp, RGB(238, 246, 251)); SetBkMode((HDC)wp, TRANSPARENT);
+        SetTextColor((HDC)wp, (HWND)lp == g_sent ? RGB(0, 150, 0) : RGB(30, 48, 68));
+        return (LRESULT)GetStockObject(NULL_BRUSH);
     case WM_ERASEBKGND: { RECT rc; GetClientRect(h, &rc); rc.top = 66; HBRUSH b = CreateSolidBrush(RGB(238, 246, 251)); FillRect((HDC)wp, &rc, b); DeleteObject(b); } return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT rc; GetClientRect(h, &rc);
