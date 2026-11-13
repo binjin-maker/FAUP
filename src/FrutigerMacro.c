@@ -38,7 +38,7 @@ typedef struct { DWORD delay; int type, a, b, c; wchar_t *text; } Ev;
 
 enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID_SPEED, ID_MOVES,
        ID_TEXT = 201, ID_FIXWPM, ID_FIXMS, ID_HUMAN, ID_WPM, ID_MS, ID_DELAY, ID_TYPOS, ID_TYPE, ID_TSTOP,
-       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT,
+       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT, ID_DIFFFIX, ID_NAVMS, ID_DEDITS,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
        ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
@@ -702,8 +702,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.16"
-#define APP_VERSION_W L"1.14.16"
+#define APP_VERSION   "1.14.18"
+#define APP_VERSION_W L"1.14.18"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1057,6 +1057,7 @@ typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
 static const Lbl LBLS[] = {
     { L"Repeat (0 = ∞):", PG_MACRO, 20, 115, 92 }, { L"Speed ×", PG_MACRO, 166, 115, 46 },
     { L"WPM:", PG_INSTR, 20, 251, 40 }, { L"ms/char:", PG_INSTR, 112, 251, 60 }, { L"Start delay (s):", PG_INSTR, 226, 251, 102 },
+    { L"Nav:", PG_INSTR, 112, 286, 30 }, { L"Edits/brk:", PG_INSTR, 176, 286, 56 },
     { L"Typo %:", PG_WINLAN, 20, 253, 52 }, { L"Burst %:", PG_WINLAN, 116, 253, 58 }, { L"Pause %:", PG_WINLAN, 220, 253, 60 },
     { L"Record:", PG_GLOBAL, 20, 403, 62 }, { L"Play:", PG_GLOBAL, 222, 403, 62 },
     { L"Auto-type:", PG_GLOBAL, 20, 431, 62 }, { L"Stop all:", PG_GLOBAL, 222, 431, 62 },
@@ -1604,6 +1605,137 @@ static void startType(void) {
     pausedTotal = 0; pauseT0 = 0; InterlockedExchange(&paused, 0);
     stopFlag = 0; typing = 1;
     CloseHandle(CreateThread(NULL, 0, TypeThread, j, 0, NULL));
+}
+
+/* ---------- diff-fixer: reconcile the target app's text to the box, humanly ---------- */
+typedef struct { wchar_t *want; int delay, navms, wpm, dedits; double burstP, pauseP, brkMin, brkMax; } DiffJob;
+
+/* a review break: freeze, show GO + countdown, resume on GO or timeout */
+static void reviewBreak(double brkMin, double brkMax) {
+    double endT = nowMs() + rrange(brkMin, brkMax);
+    InterlockedExchange(&goSkip, 0);
+    PostMessageW(hMain, WM_GOBREAK, 1, 0);
+    while (!stopFlag && !goSkip) {
+        double rem = endT - nowMs(); if (rem <= 0) break;
+        int secs = (int)(rem / 1000.0 + 0.5);
+        status(L"Review break — %d:%02d left · press GO to continue", secs / 60, secs % 60);
+        waitMs(500);
+    }
+    PostMessageW(hMain, WM_GOBREAK, 0, 0);
+    InterlockedExchange(&goSkip, 0);
+}
+
+static wchar_t *clipGet(int stripCR) {
+    wchar_t *out = NULL;
+    if (OpenClipboard(hMain)) {
+        HANDLE d = GetClipboardData(CF_UNICODETEXT);
+        wchar_t *t = d ? GlobalLock(d) : NULL;
+        if (t) {
+            out = calloc(wcslen(t) + 1, sizeof(wchar_t));
+            wchar_t *o = out;
+            for (wchar_t *q = t; *q; q++) if (!(stripCR && *q == L'\r')) *o++ = *q;
+            GlobalUnlock(d);
+        }
+        CloseClipboard();
+    }
+    return out;
+}
+static void clipSet(const wchar_t *s) {
+    if (!s || !OpenClipboard(hMain)) return;
+    EmptyClipboard();
+    size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
+    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, n);
+    if (g) { memcpy(GlobalLock(g), s, n); GlobalUnlock(g); SetClipboardData(CF_UNICODETEXT, g); }
+    CloseClipboard();
+}
+static void sendCombo(int mod, int key) { sendVk(mod, 0); sendVk(key, 0); sendVk(key, 1); sendVk(mod, 1); }
+
+static DWORD WINAPI DiffThread(LPVOID arg) {
+    DiffJob *j = arg;
+    for (int s = j->delay; s > 0 && !stopFlag; s--) { status(L"Fix starts in %d… click into the target window", s); waitMs(1000); }
+    if (!stopFlag) {
+        waitModsUp();
+        status(L"Reading the target…");
+        wchar_t *save = clipGet(0);
+        sendCombo(VK_CONTROL, 'A'); waitMs(70);
+        sendCombo(VK_CONTROL, 'C'); waitMs(140);
+        wchar_t *have = clipGet(1);
+        clipSet(save); free(save);
+        if (have) {
+            sendVk(VK_CONTROL, 0); sendVk(VK_HOME, 0); sendVk(VK_HOME, 1); sendVk(VK_CONTROL, 1);   /* cursor to start */
+            waitMs(90);
+            status(L"Fixing differences…");
+            HState hs = { 60000.0 / (j->wpm * 5.0), 1.0, j->burstP / 100.0, j->pauseP / 100.0, 0 };
+            const wchar_t *T = have, *D = j->want;
+            int lt = (int)wcslen(T), ld = (int)wcslen(D);
+            int p = 0; while (p < lt && p < ld && T[p] == D[p]) p++;
+            int sfx = 0; while (sfx < lt - p && sfx < ld - p && T[lt - 1 - sfx] == D[ld - 1 - sfx]) sfx++;
+            int tn = lt - sfx - p, dn = ld - sfx - p;
+            const wchar_t *Tm = T + p, *Dm = D + p;
+            wchar_t prev = 0;
+            for (int k = 0; k < p && !stopFlag; k++) { sendVk(VK_RIGHT, 0); sendVk(VK_RIGHT, 1); if (!waitMs(j->navms)) break; }
+            if (!stopFlag && (tn > 2000 || dn > 2000)) {
+                int edits = 0;
+                for (int k = 0; k < tn && !stopFlag; k++) { sendVk(VK_DELETE, 0); sendVk(VK_DELETE, 1); if (!waitMs(rrange(35, 80))) break; if (j->dedits > 0 && ++edits >= j->dedits) { reviewBreak(j->brkMin, j->brkMax); edits = 0; if (stopFlag) break; } }
+                for (int k = 0; k < dn && !stopFlag; k++) { if (!waitMs(hDelay(&hs, Dm[k], prev))) break; sendChar(Dm[k]); prev = Dm[k]; double pp = hPause(&hs, Dm[k]); if (pp > 0 && !waitMs(pp)) break; if (j->dedits > 0 && ++edits >= j->dedits && (Dm[k] == L' ' || Dm[k] == L'\n')) { reviewBreak(j->brkMin, j->brkMax); edits = 0; if (stopFlag) break; } }
+            } else if (!stopFlag) {
+                int W = dn + 1;
+                int *dp = calloc((size_t)(tn + 1) * W, sizeof(int));
+                char *ot = malloc((size_t)(tn + dn) + 1);
+                wchar_t *oc = malloc(((size_t)(tn + dn) + 1) * sizeof(wchar_t));
+                if (dp && ot && oc) {
+                    for (int i = 1; i <= tn; i++) for (int k = 1; k <= dn; k++)
+                        dp[i * W + k] = (Tm[i - 1] == Dm[k - 1]) ? dp[(i - 1) * W + (k - 1)] + 1
+                                      : (dp[(i - 1) * W + k] >= dp[i * W + (k - 1)] ? dp[(i - 1) * W + k] : dp[i * W + (k - 1)]);
+                    int oi = 0, i = tn, k = dn;
+                    while (i > 0 || k > 0) {
+                        if (i > 0 && k > 0 && Tm[i - 1] == Dm[k - 1]) { ot[oi] = 'M'; oc[oi] = Tm[i - 1]; oi++; i--; k--; }
+                        else if (k > 0 && (i == 0 || dp[i * W + (k - 1)] >= dp[(i - 1) * W + k])) { ot[oi] = 'I'; oc[oi] = Dm[k - 1]; oi++; k--; }
+                        else { ot[oi] = 'D'; oc[oi] = 0; oi++; i--; }
+                    }
+                    int edits = 0, wantBreak = 0;
+                    for (int q = oi - 1; q >= 0 && !stopFlag; q--) {
+                        if (ot[q] == 'M') {
+                            if (wantBreak) { reviewBreak(j->brkMin, j->brkMax); edits = 0; wantBreak = 0; if (stopFlag) break; }
+                            sendVk(VK_RIGHT, 0); sendVk(VK_RIGHT, 1); prev = oc[q]; if (!waitMs(j->navms)) break;
+                        } else if (ot[q] == 'D') {
+                            sendVk(VK_DELETE, 0); sendVk(VK_DELETE, 1); if (!waitMs(rrange(35, 80))) break;
+                            if (j->dedits > 0 && ++edits >= j->dedits) wantBreak = 1;
+                        } else {
+                            if (!waitMs(hDelay(&hs, oc[q], prev))) break; sendChar(oc[q]); prev = oc[q]; double pp = hPause(&hs, oc[q]); if (pp > 0 && !waitMs(pp)) break;
+                            if (j->dedits > 0 && ++edits >= j->dedits) wantBreak = 1;
+                        }
+                    }
+                }
+                free(dp); free(ot); free(oc);
+            }
+            free(have);
+            if (!stopFlag) status(L"Fix complete — the target now matches your text.");
+        } else status(L"Fix: couldn't read the target (is it a text field?).");
+    }
+    free(j->want); free(j);
+    InterlockedExchange(&typing, 0);
+    PostMessageW(hMain, WM_DONE, 0, 0);
+    return 0;
+}
+
+static void startDiffFix(void) {
+    if (busy()) return;
+    wchar_t *want = getRichText(GetDlgItem(hMain, ID_TEXT));
+    if (!want || !want[0]) { free(want); status(L"Fix: put the correct text in the box first."); return; }
+    DiffJob *j = calloc(1, sizeof *j);
+    j->want = want;
+    j->delay = (int)getDbl(ID_DELAY, 3); if (j->delay < 0) j->delay = 0;
+    j->navms = (int)getDbl(ID_NAVMS, 12); if (j->navms < 0) j->navms = 0; if (j->navms > 500) j->navms = 500;
+    j->wpm = (int)getDbl(ID_WPM, 60); if (j->wpm < 1) j->wpm = 1;
+    j->burstP = getPct(ID_BURSTP, DEF_BURST);
+    j->pauseP = getPct(ID_PAUSEP, DEF_PAUSE);
+    j->dedits = (int)getDbl(ID_DEDITS, 40); if (j->dedits < 0) j->dedits = 0;
+    j->brkMin = 60000.0; j->brkMax = 300000.0;   /* review break: 1-5 min */
+    pausedTotal = 0; pauseT0 = 0; InterlockedExchange(&paused, 0);
+    stopFlag = 0; typing = 1;
+    status(L"Fix: switch to the target window…");
+    CloseHandle(CreateThread(NULL, 0, DiffThread, j, 0, NULL));
 }
 
 static void magicStop(int finished);
@@ -2735,7 +2867,8 @@ static void showPage(int p) {
     curPage = p;
     hoverBtn = NULL;
     for (int i = 0; i < nctl; i++) ShowWindow(ctls[i].h, onPage(ctls[i].page, p) ? SW_SHOWNA : SW_HIDE);
-    ShowWindow(GetDlgItem(hMain, ID_GO), (p == PG_WINLAN && inBreak) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(hMain, ID_GO), (inBreak && (p == PG_WINLAN || p == PG_INSTR)) ? SW_SHOW : SW_HIDE);
+    if (p == PG_INSTR && inBreak) ShowWindow(GetDlgItem(hMain, ID_MAGIC), SW_HIDE);   /* GO takes the Magic slot during a review break */
     InvalidateRect(hMain, NULL, FALSE);
     if (p == PG_TEST) SetFocus(GetDlgItem(hMain, ID_TEDIT));
     else if (p == PG_INSTR || p == PG_WINLAN) SetFocus(GetDlgItem(hMain, ID_TEXT));
@@ -2771,6 +2904,9 @@ static void buildUI(void) {
     NUM(L"100", 62, 248, 44, ID_WPM);
     NUM(L"50", 174, 248, 44, ID_MS);
     NUM(L"3", 330, 248, 40, ID_DELAY);
+    NUM(L"12", 142, 283, 28, ID_NAVMS);
+    NUM(L"40", 232, 283, 28, ID_DEDITS);
+    BTN(L"Fix target", 266, 282, 152, 28, ID_DIFFFIX);
 
     /* Winlan: the humanizer — presets + typo/burst/pause */
     buildPage = PG_WINLAN;
@@ -2894,7 +3030,7 @@ static void rescaleAll(void) {
 static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
-    { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" },
+    { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" }, { ID_NAVMS, L"FixNavMs" }, { ID_DEDITS, L"FixEdits" },
 };
 static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay", L"Night" };
 
@@ -3002,6 +3138,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_PLAY: startPlay(); break;
         case ID_TYPE: startType(); break;
         case ID_LOADTXT: loadTextFile(); break;
+        case ID_DIFFFIX: startDiffFix(); break;
         case ID_GO: InterlockedExchange(&goSkip, 1); break;
         case ID_TSTOP: stopAll(); break;
         case ID_CLEAR: if (!busy()) { clearEv(); curFile[0] = 0; idleStatus(); } break;
@@ -3109,7 +3246,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_GOBREAK:
         InterlockedExchange(&inBreak, (LONG)wp);
-        ShowWindow(GetDlgItem(h, ID_GO), (wp && curPage == PG_WINLAN) ? SW_SHOW : SW_HIDE);
+        ShowWindow(GetDlgItem(h, ID_GO), (wp && (curPage == PG_WINLAN || curPage == PG_INSTR)) ? SW_SHOW : SW_HIDE);
+        if (curPage == PG_INSTR) ShowWindow(GetDlgItem(h, ID_MAGIC), wp ? SW_HIDE : SW_SHOWNA);
         return 0;
     case WM_DONE:
         if (!typing) SendMessageW(GetDlgItem(h, ID_TEXT), EM_SETREADONLY, FALSE, 0);
