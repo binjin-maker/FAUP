@@ -30,8 +30,8 @@ LIBS = ["user32", "gdi32", "comdlg32", "comctl32", "winmm", "dwmapi", "uxtheme",
 KEEP_NOTES = 10
 
 CHANNELS = {
-    "prod": dict(json="latest.json", exe="FrutigerAstro.exe", zip="FrutigerAstro.zip", defines=[], label="Frutiger Astro"),
-    "beta": dict(json="beta.json",   exe="AstroBeta.exe",     zip=None,                defines=["-DASTRO_BETA"], label="Astro Beta"),
+    "prod": dict(json="latest.json", exe="FrutigerAstro.exe", zip="FrutigerAstro.zip", defines=[], rc="app.rc", label="Frutiger Astro"),
+    "beta": dict(json="beta.json",   exe="AstroBeta.exe",     zip=None,                defines=["-DASTRO_BETA"], rc="app_beta.rc", label="Astro Beta"),
 }
 
 ZIP_README = "\r\n".join([
@@ -113,7 +113,7 @@ def build(ch, out):
         die("Zig isn't installed - run: pip install ziglang")
     out.parent.mkdir(exist_ok=True)
     run([sys.executable, "-m", "ziglang", "cc", "-target", "x86_64-windows-gnu", "-O2", "-s",
-         *CHANNELS[ch]["defines"], "-o", str(out), "FrutigerMacro.c", "app.rc",
+         *CHANNELS[ch]["defines"], "-o", str(out), "FrutigerMacro.c", CHANNELS[ch]["rc"],
          "-Wl,--subsystem,windows", *["-l" + l for l in LIBS]], cwd=SRC)
     data = out.read_bytes()
     if data[:2] != b"MZ": die("the build didn't produce a Windows EXE")
