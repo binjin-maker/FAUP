@@ -665,8 +665,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.5"
-#define APP_VERSION_W L"1.14.5"
+#define APP_VERSION   "1.14.6"
+#define APP_VERSION_W L"1.14.6"
 #define WM_UPDCHECKED (WM_APP + 5)
 #define WM_UPDFAIL    (WM_APP + 6)
 #define WM_UPDRESTART (WM_APP + 7)
