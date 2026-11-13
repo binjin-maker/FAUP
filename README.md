@@ -6,7 +6,7 @@
 - [The two channels](#the-two-channels-frutiger-astro--astro-beta)
 - [What a copy sends — and never sends](#what-a-copy-sends--and-never-sends) · [Frutiger Servers](#frutiger-servers)
 - [Publishing](#publishing) · [Publishing as an AI agent](#publishing-as-claude-or-any-ai-agent)
-- [latest.json / beta.json](#latestjson--betajson) · [Rules](#rules-that-matter) · [Troubleshooting](#troubleshooting)
+- [latest.json](#latestjson) · [Rules](#rules-that-matter) · [Troubleshooting](#troubleshooting)
 
 ## Install
 
@@ -40,10 +40,11 @@ The **Update** tab shows a status light, the installed version, a changelog (*Wh
 | Who runs it | everyone you give a code to | just you, locally |
 | Activation code | required | none |
 | Telemetry | yes (see below) | none |
-| Reads | `update/latest.json` → `FrutigerAstro.exe` | `update/beta.json` → `AstroBeta.exe` |
+| Where it lives | published to this repo | **local only** — built to `build/`, never published |
+| Updates | from `update/latest.json` | none (you run the newest local build) |
 | Built by | `faup.py promote` | `faup.py beta` |
 
-The flow: make a change → `faup.py beta <ver>` → your Astro Beta copy auto-updates → you test → when happy, `faup.py promote <ver>` ships the *same* version to Frutiger Astro.
+The flow: make a change → `faup.py beta <ver>` builds your local `AstroBeta.exe` → run and test it → when happy, `faup.py promote <ver>` ships the *same* version to Frutiger Astro. Beta is never published, so a copy you didn't hand out can't download an un-activated build.
 
 ## What a copy sends — and never sends
 
@@ -94,7 +95,7 @@ Other commands:
 
 Bump **both** `APP_VERSION` and `APP_VERSION_W` in `src/FrutigerMacro.c`, build from `src/` with the flags in `faup.py` (add `-DASTRO_BETA` for the Beta build), move the EXE to `update/`, commit, push, then fill `update/latest.json` (or `beta.json`) with the version, a `raw.githubusercontent.com` link **pinned to that commit**, the EXE's SHA-256 (`certutil -hashfile … SHA256`), and notes. Commit and push.
 
-## `latest.json` / `beta.json`
+## `latest.json`
 
 ```json
 {

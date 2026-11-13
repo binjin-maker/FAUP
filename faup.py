@@ -222,11 +222,17 @@ def main(argv):
         data = build(ch, ROOT / "build" / CHANNELS[ch]["exe"])
         print(f"built {CHANNELS[ch]['label']}  v{src_version()}  {len(data):,} bytes  sha256 {hashlib.sha256(data).hexdigest()}")
     elif cmd == "beta" and len(args) >= 2:
-        publish("beta", args[1], args[2:], push, repo_ch)
+        set_version(args[1])
+        data = build("beta", ROOT / "build" / CHANNELS["beta"]["exe"])
+        print(f"built Astro Beta {args[1]} -> build/{CHANNELS['beta']['exe']} ({len(data):,} bytes)")
+        print("  local test build - run it directly; it is NOT published and never leaves your machine.")
     elif cmd in ("promote", "publish") and len(args) >= 2:
         publish("prod", args[1], args[2:], push, repo_ch)
     elif cmd == "check":
-        check("beta" if "--beta" in flags else "prod")
+        if "--beta" in flags:
+            print("Astro Beta is a local test build - nothing is published to verify. Build it with: faup.py beta <ver>")
+        else:
+            check("prod")
     else:
         print(__doc__.strip())
 

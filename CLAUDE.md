@@ -7,7 +7,8 @@ This repo is the live update system for Frutiger Astro. Every installed copy rea
 - `updRepo` in `src/FrutigerMacro.c` must stay `L"binjin-maker/FAUP"`.
 - Never force-push, rewrite history, reuse or lower a version (per channel), or point `url` at `main`.
 - `src/` is public. The access code lives only as a SHA-256 hash — never commit the plaintext code. Ask Binjin before committing anything else that shouldn't be public.
-- The only destructive behaviour is the app's **local** three-wrong-codes self-delete of its own exe. There is no remote terminate and must never be one: Frutiger Servers only listens. Don't add a server→client command channel.
+- The only destructive behaviour is the app's **local** three-wrong-codes self-delete of its own exe. There is no remote terminate and must never be one.
+- Frutiger Servers may push **display-only announcements**: plain text the user sees and dismisses. The client only ever *renders* server content as a banner — it must never execute it, act on it, change settings from it, or treat it as a command. No remote destructive or control action, ever.
 - Telemetry is version + heartbeat only, off unless `[Servers] Url=` is set. Never add collection of user files, Instruct text, or PC data.
 - Release notes are shown to users in *What's new*. Keep them short and leave out repo names.
 - Send EXEs to Binjin as `.ex_` files (browsers block `.exe` downloads).
