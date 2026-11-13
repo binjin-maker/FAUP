@@ -1,0 +1,6 @@
+{
+  "version": "1.14.6",
+  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/9a331eb18de74bf0fe7a47be561684e7ccf1c8ad/update/FrutigerAstro.exe",
+  "sha256": "9482c7fda6e8eb7529066744e1dd603a8aed487b82e234cb2f604081956491e2",
+  "notes": "1.14.6\n- First release from FAUP: updates now come from binjin-maker/FAUP\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
+}
