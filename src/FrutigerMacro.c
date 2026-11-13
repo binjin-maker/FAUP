@@ -667,12 +667,20 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 #define APP_VERSION   "1.14.7"
 #define APP_VERSION_W L"1.14.7"
+#ifdef ASTRO_BETA
+#define APP_NAME_W L"Astro Beta"
+#define UPD_JSON   L"beta.json"
+#else
+#define APP_NAME_W L"Frutiger Astro"
+#define UPD_JSON   L"latest.json"
+#define APP_CODE_HASH L"6093c0f3f026afdae8fdaa5bd55b308eda94acbb9450971dd03824ee3a372106"
+#endif
 #define WM_UPDCHECKED  (WM_APP + 5)
 #define WM_UPDFAIL     (WM_APP + 6)
 #define WM_UPDRESTART  (WM_APP + 7)
 #define WM_UPDPROGRESS (WM_APP + 10)
 
-enum { US_CHECKING, US_CURRENT, US_AVAILABLE, US_DOWNLOADING, US_INSTALLING, US_OFFLINE, US_ERROR, US_FAILED };
+enum { US_CHECKING, US_CURRENT, US_AVAILABLE, US_DOWNLOADING, US_INSTALLING, US_OFFLINE, US_ERROR, US_FAILED, US_IDLE };
 static volatile LONG updState, updPct, updBusy;
 static int updAvail, justUpdated;
 static wchar_t updRepo[128] = L"binjin-maker/FAUP";
@@ -680,7 +688,7 @@ static wchar_t updLatest[32], updUrl[1024], updDigest[80], updDetail[200];
 static wchar_t *updNotes;
 
 static int updLight(void) {
-    static const int L[] = { 0x2b9be6, 0x34c23a, 0xf5b31a, 0x2b9be6, 0x2b9be6, 0xe0483a, 0xe0483a, 0xe0483a };
+    static const int L[] = { 0x2b9be6, 0x34c23a, 0xf5b31a, 0x2b9be6, 0x2b9be6, 0xe0483a, 0xe0483a, 0xe0483a, 0x9aa8b8 };
     return L[(int)updState];
 }
 static wchar_t exePath[MAX_PATH];
@@ -786,7 +794,7 @@ static wchar_t *cleanNotes(const char *md) {
 static DWORD WINAPI CheckThread(LPVOID unused) {
     (void)unused;
     wchar_t url[300];
-    swprintf(url, 300, L"https://raw.githubusercontent.com/%s/main/update/latest.json?t=%llu", updRepo, (unsigned long long)GetTickCount64());
+    swprintf(url, 300, L"https://raw.githubusercontent.com/%s/main/update/%s?t=%llu", updRepo, UPD_JSON, (unsigned long long)GetTickCount64());
     char *b; size_t len; DWORD st;
     int e = httpGet(url, L"Cache-Control: no-cache\r\n", &b, &len, &st, 0);
     int state = US_CURRENT, avail = 0;
@@ -821,7 +829,7 @@ static DWORD WINAPI CheckThread(LPVOID unused) {
 static void fillNotes(void) {
     int st = (int)updState;
     const wchar_t *s = updNotes && updNotes[0] ? updNotes :
-        st == US_CHECKING ? L"Checking for updates…" :
+        st == US_CHECKING ? L"Checking for updates…" : st == US_IDLE ? L"Press Check for updates to see what's new." :
         st == US_OFFLINE || st == US_ERROR ? L"The changelog shows up once the app can check for updates." : L"No changelog yet.";
     size_t n = wcslen(s);
     wchar_t *o = malloc((n * 2 + 1) * sizeof(wchar_t)), *q = o;
@@ -936,7 +944,7 @@ static void restartUpdated(void) {
 
 enum { PG_MACRO, PG_INSTR, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1 };
 static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Instruct", L"Editor", L"Test", L"Update" };
-static int curPage = PG_INSTR, tabHover = -1;
+static int curPage = PG_MACRO, tabHover = -1;
 
 static Canvas pageC[PG_N], backC;
 static HFONT hFont, hBold, hTitle, hSmall, hPrompt, hHead;
@@ -970,7 +978,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -979,6 +987,8 @@ static Tog tog[TG_N] = {
     { L"Humanizer",             PG_INSTR, 236, 218, 102, 1, 1 },
     { L"Typos",                 PG_INSTR, 342, 218,  78, 0, 1 },
     { L"Docs-safe",             PG_INSTR, 332, 280,  88, 0, 1 },
+    { L"Auto-check for updates", PG_UPDATE,  20, 280, 196, 0, 1 },
+    { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1041,7 +1051,7 @@ static void renderPages(void) {
         glassPanel(c, 10, 8, 420, 32);
         if (p == PG_MACRO) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 146, 400, 212); }
         if (p == PG_INSTR || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
-        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 104); }
+        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 80); }
         if (p == PG_TEST) { glassPanel(c, 10, 48, 420, 490); inset(c, 20, 90, 400, 104); inset(c, 20, 320, 400, 160); }
         if (p != PG_TEST) { glassPanel(c, 10, 378, 420, 112); glassPanel(c, 10, 498, 420, 40); }
         SetBkMode(dc, TRANSPARENT);
@@ -1065,7 +1075,7 @@ static void renderPages(void) {
                    20, 520, 400, 16, HINT, DT_LEFT | DT_SINGLELINE);
         }
         if (p != PG_TEST) {
-            textAt(dc, hTitle, L"Hotkeys (global)", 20, 380, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+            textAt(dc, hTitle, L"Hotkeys", 20, 380, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
             textAt(dc, hSmall, L"click a box, press the combo, then Apply", 200, 383, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
         for (unsigned i = 0; i < sizeof LBLS / sizeof LBLS[0]; i++)
@@ -1210,7 +1220,7 @@ static const wchar_t *PROMPTS[] = {
 
 static void drawUpdatePage(Canvas *c) {
     static const wchar_t *UHEAD[] = { L"Checking for updates…", L"You're up to date", L"Update available", L"Downloading update…",
-                                      L"Installing update…", L"You're offline", L"Couldn't check for updates", L"Update didn't install" };
+                                      L"Installing update…", L"You're offline", L"Couldn't check for updates", L"Update didn't install", L"Not checked yet" };
     int st = (int)updState;
     double cx = S(52), cy = S(110), r = S(15);
     disc(c, cx, cy, r * 2.0, updLight(), 0.14, r * 1.2);
@@ -1502,6 +1512,146 @@ static void restartType(void) {
     else rewindType();
 }
 
+#ifndef ASTRO_BETA
+/* ---------- activation + telemetry (production only) ---------- */
+
+static wchar_t installId[24], teleUrl[300];
+static HWND hAct, hActEdit;
+static Canvas actBg;
+static int actResult, actTries;
+
+static void selfDestruct(void) {
+    /* removes ONLY this exe (and its own temp helper), nothing else */
+    wchar_t shortExe[MAX_PATH], tmp[MAX_PATH], bat[MAX_PATH];
+    if (!GetShortPathNameW(exePath, shortExe, MAX_PATH)) wcscpy(shortExe, exePath);
+    if (!GetTempPathW(MAX_PATH, tmp)) return;
+    swprintf(bat, MAX_PATH, L"%sfa_uninstall_%lu.bat", tmp, (unsigned long)GetCurrentProcessId());
+    char exeA[MAX_PATH];
+    WideCharToMultiByte(CP_ACP, 0, shortExe, -1, exeA, MAX_PATH, NULL, NULL);
+    char buf[MAX_PATH * 2 + 256];
+    int n = snprintf(buf, sizeof buf,
+        "@echo off\r\n:loop\r\ndel /f /q \"%s\"\r\n"
+        "if exist \"%s\" ping -n 2 127.0.0.1 >nul\r\n"
+        "if exist \"%s\" goto loop\r\ndel /f /q \"%%~f0\"\r\n", exeA, exeA, exeA);
+    HANDLE hf = CreateFileW(bat, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return;
+    DWORD wr; WriteFile(hf, buf, (DWORD)n, &wr, NULL); CloseHandle(hf);
+    wchar_t cmd[MAX_PATH + 32];
+    swprintf(cmd, MAX_PATH + 32, L"cmd /c \"%s\"", bat);
+    STARTUPINFOW si = { sizeof si }; si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi;
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    }
+}
+
+static int codeOk(const wchar_t *entry) {
+    char u8[64]; int n = WideCharToMultiByte(CP_UTF8, 0, entry, -1, u8, sizeof u8, NULL, NULL);
+    if (n <= 1) return 0;
+    wchar_t hex[80] = L"";
+    if (!sha256Hex(u8, (size_t)(n - 1), hex)) return 0;
+    return _wcsicmp(hex, APP_CODE_HASH) == 0;
+}
+
+static void makeInstallId(void) {
+    unsigned long long a = ((unsigned long long)GetTickCount64() << 20) ^ ((unsigned long long)GetCurrentProcessId() << 4);
+    LARGE_INTEGER q; QueryPerformanceCounter(&q); a ^= (unsigned long long)q.QuadPart;
+    swprintf(installId, 24, L"%016llx", a);
+}
+
+static LRESULT CALLBACK ActProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    switch (m) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
+        BitBlt(dc, 0, 0, actBg.w, actBg.h, actBg.dc, 0, 0, SRCCOPY);
+        if (actTries < 3) {
+            wchar_t t[64]; swprintf(t, 64, L"Incorrect code — %d attempt%s left", actTries, actTries == 1 ? L"" : L"s");
+            SetBkMode(dc, TRANSPARENT); SelectObject(dc, hFont); SetTextColor(dc, RGB(200, 40, 30));
+            RECT r = { 0, S(170), actBg.w, S(190) }; DrawTextW(dc, t, -1, &r, DT_CENTER | DT_SINGLELINE);
+        }
+        EndPaint(h, &ps);
+    } return 0;
+    case WM_CTLCOLOREDIT:
+        SetBkColor((HDC)wp, RGB(255, 255, 255)); SetTextColor((HDC)wp, RGB(14, 52, 92));
+        return (LRESULT)GetStockObject(WHITE_BRUSH);
+    case WM_COMMAND:
+        if (LOWORD(wp) == 1) {
+            wchar_t e[64]; GetWindowTextW(hActEdit, e, 64);
+            if (codeOk(e)) {
+                makeInstallId();
+                WritePrivateProfileStringW(L"Activation", L"Id", installId, iniPath);
+                WritePrivateProfileStringW(L"Activation", L"Done", L"1", iniPath);
+                actResult = 1; DestroyWindow(h);
+            } else {
+                actTries--;
+                SetWindowTextW(hActEdit, L"");
+                if (actTries <= 0) { selfDestruct(); actResult = -1; DestroyWindow(h); }
+                else { InvalidateRect(h, NULL, FALSE); SetFocus(hActEdit); }
+            }
+            return 0;
+        }
+        break;
+    case WM_CLOSE: actResult = -2; DestroyWindow(h); return 0;
+    }
+    return DefWindowProcW(h, m, wp, lp);
+}
+
+static int runActivation(HINSTANCE hi) {
+    int cw = S(380), ch = S(250);
+    actBg = mkCanvas(cw, ch);
+    renderSky(&actBg);
+    glassPanel(&actBg, 10, 10, 360, 230);
+    HDC dc = actBg.dc; SetBkMode(dc, TRANSPARENT);
+    textAt(dc, hHead, APP_NAME_W, 0, 28, 380, 30, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    textAt(dc, hFont, L"Enter your access code to activate.", 0, 66, 380, 20, NAVY, DT_CENTER | DT_SINGLELINE);
+    textAt(dc, hSmall, L"Three wrong codes removes this copy. It only ever reports its version — never your files or anything you type.",
+           30, 192, 320, 44, HINT, DT_CENTER | DT_WORDBREAK);
+    WNDCLASSW ac = {0};
+    ac.lpfnWndProc = ActProc; ac.hInstance = hi; ac.lpszClassName = L"DoogActivate";
+    ac.hCursor = LoadCursor(NULL, IDC_ARROW); ac.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    RegisterClassW(&ac);
+    RECT rc = { 0, 0, cw, ch }; AdjustWindowRect(&rc, WS_CAPTION | WS_SYSMENU, FALSE);
+    int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
+    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    hAct = CreateWindowExW(WS_EX_TOPMOST, L"DoogActivate", APP_NAME_W, WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                           wa.left + (wa.right - wa.left - ww) / 2, wa.top + (wa.bottom - wa.top - wh) / 2, ww, wh, NULL, NULL, hi, NULL);
+    hActEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_CENTER | ES_PASSWORD,
+                              S(100), S(98), S(180), S(26), hAct, (HMENU)2, hi, NULL);
+    SendMessageW(hActEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
+    HWND b = CreateWindowExW(0, L"BUTTON", L"Activate", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                             S(150), S(134), S(80), S(30), hAct, (HMENU)1, hi, NULL);
+    SendMessageW(b, WM_SETFONT, (WPARAM)hFont, TRUE);
+    actTries = 3; actResult = 0;
+    ShowWindow(hAct, SW_SHOW); SetForegroundWindow(hAct); SetFocus(hActEdit);
+    MSG msg;
+    while (actResult == 0 && GetMessageW(&msg, NULL, 0, 0) > 0) {
+        if (!IsDialogMessageW(hAct, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    }
+    freeCanvas(&actBg);
+    return actResult;
+}
+
+static DWORD WINAPI BeatThread(LPVOID arg) {
+    wchar_t *u = arg;
+    HINTERNET in = InternetOpenW(L"FrutigerAstro/" APP_VERSION_W, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (in) {
+        HINTERNET h = InternetOpenUrlW(in, u, NULL, 0, INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_RELOAD, 0);
+        if (h) InternetCloseHandle(h);
+        InternetCloseHandle(in);
+    }
+    free(u); return 0;
+}
+
+static void beat(const wchar_t *ev) {
+    GetPrivateProfileStringW(L"Servers", L"Url", L"", teleUrl, 300, iniPath);
+    if (!teleUrl[0]) return;
+    wchar_t *u = malloc(440 * sizeof(wchar_t));
+    swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=%s",
+             teleUrl, wcschr(teleUrl, L'?') ? L'&' : L'?', installId, APP_VERSION_W, ev);
+    CloseHandle(CreateThread(NULL, 0, BeatThread, u, 0, NULL));
+}
+#endif
+
 /* ---------- Vista glass frame ---------- */
 
 #define FR 7
@@ -1601,6 +1751,9 @@ static void capInvalidate(void) {
     InvalidateRect(hFrame, &r, FALSE);
 }
 
+static int wasMin;
+static void showPage(int p);
+
 static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
     case WM_NCHITTEST: {
@@ -1639,7 +1792,11 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         if (wp == WMSZ_LEFT || wp == WMSZ_TOPLEFT || wp == WMSZ_BOTTOMLEFT) r->left = r->right - nw; else r->right = r->left + nw;
         if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT) r->top = r->bottom - nh; else r->bottom = r->top + nh;
     } return TRUE;
-    case WM_SIZE: if (sizing) InvalidateRect(h, NULL, FALSE); break;
+    case WM_SIZE:
+        if (wp == SIZE_MINIMIZED) wasMin = 1;
+        else if (wasMin) { wasMin = 0; showPage(PG_MACRO); }
+        if (sizing) InvalidateRect(h, NULL, FALSE);
+        break;
     case WM_EXITSIZEMOVE:
         if (sizing) {
             RECT wr; GetWindowRect(h, &wr);
@@ -1649,6 +1806,9 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             rescaleAll();
         }
         break;
+#ifndef ASTRO_BETA
+    case WM_TIMER: if (wp == 9) beat(L"ping"); return 0;
+#endif
     case WM_NCCALCSIZE: if (wp) return 0; break;
     case WM_NCACTIVATE: return DefWindowProcW(h, m, wp, -1);
     case WM_SYSCOMMAND:
@@ -2339,8 +2499,8 @@ static void buildUI(void) {
     BTN(L"Save…", 364, 314, 56, 28, ID_ESAVE);
 
     buildPage = PG_UPDATE;
-    mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 388, 94, ID_UNOTES);
-    BTN(L"Check for updates", 130, 312, 180, 32, ID_UACTION);
+    mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 388, 70, ID_UNOTES);
+    BTN(L"Check for updates", 130, 316, 180, 30, ID_UACTION);
 
     buildPage = PG_TEST;
     HWND ed = mk(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 20, 202, 400, 110, ID_TEDIT);
@@ -2410,7 +2570,7 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall" };
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -2581,7 +2741,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_UPDCHECKED:
         if (lp) { free(updNotes); updNotes = (wchar_t *)lp; }
         updSync();
-        if (updAvail) status(L"Update %s is ready — open the Update tab to install it.", updLatest);
+        if (updAvail) {
+            if (tog[TG_UAUTO].on && !busy()) startInstall();
+            else status(L"Update %s is ready — open the Update tab to install it.", updLatest);
+        }
         return 0;
     case WM_UPDPROGRESS: InvalidateRect(h, NULL, FALSE); return 0;
     case WM_UPDFAIL: {
@@ -2598,6 +2761,130 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     return DefWindowProcW(h, m, wp, lp);
+}
+
+/* ---------- splash ---------- */
+
+#define SPL_W 420
+#define SPL_H 270
+#define SPL_M 24
+static Canvas splC, splBase, splOut;
+static unsigned char *splCov, *splSh;
+static double splT0, splEnd;
+static HWND hSplash;
+
+static void splashOrb(Canvas *c, double cx, double cy, double r, double t) {
+    disc(c, cx, cy, r * 1.55, 0xbff8ff, 0.22, r * 0.7);
+    disc(c, cx, cy, r, 0x0b7fd0, 1, 1.2);
+    disc(c, cx, cy + r * 0.2, r * 0.86, 0x22b5ee, 0.85, r * 0.55);
+    disc(c, cx, cy + r * 0.5, r * 0.55, 0x7ff0c6, 0.55, r * 0.45);
+    double band = -1.4 + 2.8 * clamp01((t - 300) / 800.0);
+    int x0 = (int)(cx - r), x1 = (int)(cx + r) + 1, y0 = (int)(cy - r), y1 = (int)(cy + r) + 1;
+    for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+        double dx = (x + .5 - cx) / r, dy = (y + .5 - cy) / r;
+        if (dx * dx + dy * dy >= 0.94) continue;
+        double k = dx + dy * 0.45 - band, a = exp(-k * k / 0.018) * 0.55;
+        if (a > 0.01) blend(c, x, y, 0xffffff, a);
+    }
+    disc(c, cx - r * 0.12, cy - r * 0.42, r * 0.62, 0xffffff, 0.42, r * 0.45);
+    disc(c, cx - r * 0.32, cy - r * 0.52, r * 0.2, 0xffffff, 0.9, r * 0.12);
+    ring(c, cx, cy, r, 0xffffff, 0.65, 1.4);
+}
+
+static void splashBase(void) {
+    int W = splBase.w, m = S(SPL_M), cw = S(SPL_W), ch = S(SPL_H);
+    Canvas sky = mkCanvas(cw, ch);
+    renderSky(&sky);
+    for (int y = 0; y < ch; y++) memcpy(splBase.px + (size_t)(y + m) * W + m, sky.px + (size_t)y * cw, (size_t)cw * 4);
+    freeCanvas(&sky);
+    rrGloss(&splBase, m, m, cw, ch, S(18), 0.42, 0.42, 0.04);
+    rrStroke(&splBase, m, m, cw, ch, S(18), 0xffffff, 0.85, 1.3, 0);
+    HDC dc = splBase.dc;
+    SetBkMode(dc, TRANSPARENT);
+    HFONT big = CreateFontW(-S(30), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    HFONT sml = CreateFontW(-S(13), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    textAt(dc, big, APP_NAME_W, SPL_M, SPL_M + 150, SPL_W, 40, RGB(20, 92, 150), DT_CENTER | DT_SINGLELINE);
+    textAt(dc, big, APP_NAME_W, SPL_M, SPL_M + 148, SPL_W, 40, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    DeleteObject(big); DeleteObject(sml);
+}
+
+static void splashFrame(void) {
+    static const float SB[][3] = { { 0.08f, 0.10f, 8 }, { 0.18f, 0.55f, 5 }, { 0.30f, 0.30f, 10 }, { 0.70f, 0.80f, 6 },
+                                   { 0.80f, 0.20f, 11 }, { 0.91f, 0.62f, 7 }, { 0.24f, 0.90f, 6 }, { 0.62f, 0.45f, 5 } };
+    double t = nowMs() - splT0;
+    int W = splC.w, H = splC.h, m = S(SPL_M), cw = S(SPL_W), ch = S(SPL_H);
+    Canvas *c = &splC;
+    memcpy(c->px, splBase.px, (size_t)W * H * 4);
+    for (unsigned i = 0; i < sizeof SB / sizeof SB[0]; i++) {
+        double ph = fmod(SB[i][1] + t / (3200.0 + i * 260), 1.0);
+        bubble(c, m + SB[i][0] * cw + sin(t / 520.0 + i * 1.7) * S(5), m + ch + S(14) - ph * (ch + S(28)), S((int)SB[i][2]));
+    }
+    splashOrb(c, m + cw / 2.0, m + S(84) + sin(t / 420.0) * S(2), S(46), t);
+    double bw = S(200), bh = S(9), bx = m + (cw - bw) / 2, by = m + S(234), p = clamp01((t - 150) / 950.0);
+    rrFill(c, bx, by, bw, bh, bh / 2, 0xffffff, 0xd8f2ff, 0.6, 0.5);
+    rrStroke(c, bx, by, bw, bh, bh / 2, 0x1f6aa8, 0.35, 1, 0);
+    if (p > 0) {
+        double fw = fmax(bh, bw * p);
+        rrFill(c, bx, by, fw, bh, bh / 2, 0x9df0ff, 0x1f9be0, 1, 1);
+        rrGloss(c, bx, by, fw, bh, bh / 2, 0.5, 0.7, 0.15);
+    }
+    for (int i = 0; i < W * H; i++) {
+        int cv = splCov[i], sh = splSh[i] * (255 - cv) / 255;
+        DWORD px = c->px[i];
+        int r = ((px >> 16) & 255) * cv / 255 + 10 * sh / 255;
+        int g = ((px >> 8) & 255) * cv / 255 + 42 * sh / 255;
+        int b = (px & 255) * cv / 255 + 74 * sh / 255;
+        splOut.px[i] = ((DWORD)(cv + sh) << 24) | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
+    }
+    double fade = clamp01(t / 220.0) * clamp01((splEnd - t) / 260.0);
+    BLENDFUNCTION bf = { AC_SRC_OVER, 0, (BYTE)(fade * 255), AC_SRC_ALPHA };
+    POINT at = { 0, 0 }; SIZE sz = { W, H };
+    UpdateLayeredWindow(hSplash, NULL, NULL, &sz, splOut.dc, &at, 0, &bf, ULW_ALPHA);
+}
+
+static LRESULT CALLBACK SplashProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    if (m == WM_TIMER) { splashFrame(); return 0; }
+    if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN) {
+        double t = nowMs() - splT0;
+        if (t + 200 < splEnd) splEnd = fmax(t + 200, 240);
+        return 0;
+    }
+    return DefWindowProcW(h, m, wp, lp);
+}
+
+static void runSplash(HINSTANCE hi) {
+    int m = S(SPL_M), cw = S(SPL_W), ch = S(SPL_H), W = cw + 2 * m, H = ch + 2 * m;
+    splC = mkCanvas(W, H); splBase = mkCanvas(W, H); splOut = mkCanvas(W, H);
+    memset(splBase.px, 0, (size_t)W * H * 4);
+    splCov = malloc((size_t)W * H); splSh = malloc((size_t)W * H);
+    double rad = S(18), blur = S(SPL_M - 4);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        double d = sdRR(x + .5, y + .5, m, m, cw, ch, rad), ds = sdRR(x + .5, y + .5, m, m + S(5), cw, ch, rad);
+        double f = ds <= 0 ? 1 : clamp01(1 - ds / blur);
+        splCov[y * W + x] = (unsigned char)(clamp01(0.5 - d) * 255 + .5);
+        splSh[y * W + x] = (unsigned char)(0.38 * f * f * 255 + .5);
+    }
+    splashBase();
+    WNDCLASSW sc = {0};
+    sc.lpfnWndProc = SplashProc; sc.hInstance = hi; sc.lpszClassName = L"DoogSplash";
+    sc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassW(&sc);
+    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    hSplash = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"DoogSplash", APP_NAME_W, WS_POPUP,
+                              wa.left + (wa.right - wa.left - W) / 2, wa.top + (wa.bottom - wa.top - H) / 2, W, H, NULL, NULL, hi, NULL);
+    splT0 = nowMs(); splEnd = 1700;
+    splashFrame();
+    ShowWindow(hSplash, SW_SHOWNOACTIVATE);
+    SetTimer(hSplash, 1, 15, NULL);
+    MSG msg;
+    while (nowMs() - splT0 < splEnd) {
+        BOOL r = GetMessageW(&msg, NULL, 0, 0);
+        if (r <= 0) { PostQuitMessage(r < 0 ? 1 : (int)msg.wParam); break; }
+        TranslateMessage(&msg); DispatchMessageW(&msg);
+    }
+    KillTimer(hSplash, 1); DestroyWindow(hSplash); hSplash = NULL;
+    free(splCov); free(splSh);
+    freeCanvas(&splC); freeCanvas(&splBase); freeCanvas(&splOut);
 }
 
 #define IDI_MAIL 2
@@ -2635,6 +2922,12 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     }
     makeFonts();
     for (int i = 0; i < HK_N; i++) hkVal[i] = (WORD)GetPrivateProfileIntW(L"Hotkeys", HKKEY[i], hkVal[i], iniPath);
+#ifndef ASTRO_BETA
+    if (!(GetPrivateProfileIntW(L"Activation", L"Done", 0, iniPath) == 1)) {
+        if (runActivation(hi) != 1) return 0;
+    }
+    GetPrivateProfileStringW(L"Activation", L"Id", L"", installId, 24, iniPath);
+#endif
 
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc; wc.hInstance = hi; wc.lpszClassName = L"DoogMacro";
@@ -2672,12 +2965,17 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     loadSettings();
     applyHotkeys(0);
     newPrompt(0);
-    showPage(PG_INSTR);
+    showPage(PG_MACRO);
     idleStatus();
     setKbLabel();
     hkGuard = SetWindowsHookExW(WH_KEYBOARD_LL, GuardProc, GetModuleHandleW(NULL), 0);
     if (justUpdated) status(L"Updated to v%s — enjoy!", APP_VERSION_W);
-    startCheck();
+    if (tog[TG_UCHECK].on) startCheck(); else { updState = US_IDLE; updSync(); }
+#ifndef ASTRO_BETA
+    beat(L"launch");
+    SetTimer(hFrame, 9, 300000, NULL);
+#endif
+    runSplash(hi);
     ShowWindow(hFrame, show);
 
     MSG msg;

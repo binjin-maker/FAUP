@@ -3,3 +3,6 @@ __pycache__/
 *.ini
 *.fmac
 *.dmac
+servers/frutiger_servers_data.json
+servers/*.tmp
+servers/dashboard.png
