@@ -36,7 +36,7 @@ typedef struct { DWORD delay; int type, a, b, c; wchar_t *text; } Ev;
 
 enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID_SPEED, ID_MOVES,
        ID_TEXT = 201, ID_FIXWPM, ID_FIXMS, ID_HUMAN, ID_WPM, ID_MS, ID_DELAY, ID_TYPOS, ID_TYPE, ID_TSTOP,
-       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO,
+       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
        ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
@@ -316,12 +316,14 @@ static int lagLength(void) {
 
 static void humanType(TypeJob *j) {
     HState s = { 60000.0 / (j->wpm * 5.0), 1.0, j->burstP / 100.0, j->pauseP / 100.0, 0 };
+    double base0 = s.base;
     double typoP = j->typos ? j->typoP / 100.0 : 0;
     int len = (int)wcslen(j->text), safeUntil = -1, extra = 0, sinceBreak = 0;
     rs ^= GetTickCount64() * 2654435761ULL;
     j->stopAt = j->start; j->stopExtra = 0;
 
     for (int i = j->start; i < len && !stopFlag; i++) {
+        if (i > 400 && s.base < base0 * 1.3) s.base *= 1.00004;   /* gentle fatigue: typing drifts slower over a long passage */
         wchar_t c = j->text[i], prev = i ? j->text[i - 1] : 0;
         if (c == L'\r') continue;
         if (!waitMs(hDelay(&s, c, prev))) break;
@@ -684,8 +686,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.13"
-#define APP_VERSION_W L"1.14.13"
+#define APP_VERSION   "1.14.14"
+#define APP_VERSION_W L"1.14.14"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1506,6 +1508,41 @@ static void resetResume(void) {
 static int resumeValid(const wchar_t *text) {
     return resumeIdx > 0 && resumeText && (int)wcslen(text) > resumeIdx - 1 &&
            (int)wcslen(resumeText) >= resumeIdx && !wcsncmp(text, resumeText, resumeIdx);
+}
+
+/* Load a .txt/.md file into the Instruct/Winlan text box (UTF-8 or UTF-16 LE). */
+static void loadTextFile(void) {
+    if (busy()) { status(L"Stop typing before loading a file."); return; }
+    wchar_t path[MAX_PATH]; path[0] = 0;
+    OPENFILENAMEW o = {0};
+    o.lStructSize = sizeof o; o.hwndOwner = hMain;
+    o.lpstrFilter = L"Text (*.txt;*.md)\0*.txt;*.md\0All files\0*.*\0";
+    o.lpstrFile = path; o.nMaxFile = MAX_PATH; o.Flags = OFN_FILEMUSTEXIST;
+    if (!GetOpenFileNameW(&o)) return;
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) { status(L"Couldn't open that file."); return; }
+    DWORD sz = GetFileSize(h, NULL), rd = 0;
+    if (sz == INVALID_FILE_SIZE || sz > 64u * 1024 * 1024) { CloseHandle(h); status(L"File too large."); return; }
+    char *buf = malloc(sz + 2); if (!buf) { CloseHandle(h); return; }
+    ReadFile(h, buf, sz, &rd, NULL); CloseHandle(h); buf[rd] = 0; buf[rd + 1] = 0;
+    wchar_t *w = NULL;
+    if (rd >= 2 && (unsigned char)buf[0] == 0xFF && (unsigned char)buf[1] == 0xFE) {
+        int n = (int)((rd - 2) / 2); w = malloc((n + 1) * sizeof(wchar_t));
+        memcpy(w, buf + 2, (size_t)n * 2); w[n] = 0;
+    } else {
+        int skip = (rd >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF) ? 3 : 0;
+        int wn = MultiByteToWideChar(CP_UTF8, 0, buf + skip, (int)(rd - skip), NULL, 0);
+        w = malloc(((size_t)wn + 1) * sizeof(wchar_t));
+        MultiByteToWideChar(CP_UTF8, 0, buf + skip, (int)(rd - skip), w, wn); w[wn] = 0;
+    }
+    free(buf);
+    resetResume();
+    HWND te = GetDlgItem(hMain, ID_TEXT);
+    resetTextFormat(te);
+    SetWindowTextW(te, w ? w : L"");
+    free(w);
+    const wchar_t *name = wcsrchr(path, L'\\'); name = name ? name + 1 : path;
+    status(L"Loaded %s", name);
 }
 
 static void startType(void) {
@@ -2645,16 +2682,17 @@ static void buildUI(void) {
     NUM(L"1500", 150, 283, 44, ID_CHUNK);
     NUM(L"5", 242, 283, 28, ID_BRKMIN);
     NUM(L"35", 290, 283, 28, ID_BRKMAX);
-    BTN(L"GO", 340, 314, 80, 30, ID_GO);
+    BTN(L"GO", 342, 314, 78, 30, ID_GO);
 
     buildPage = PG_TYPING;
-    hBtn[HK_TYPE] = BTN(L"Type", 20, 314, 100, 30, ID_TYPE);
-    hBtn[HK_STOP] = BTN(L"Stop", 124, 314, 76, 30, ID_TSTOP);
-    BTN(L"Restart", 204, 314, 70, 30, ID_TRESTART);
-    BTN(L"Clear", 278, 314, 58, 30, ID_TCLEAR);
+    hBtn[HK_TYPE] = BTN(L"Type", 20, 314, 88, 30, ID_TYPE);
+    hBtn[HK_STOP] = BTN(L"Stop", 112, 314, 62, 30, ID_TSTOP);
+    BTN(L"Restart", 178, 314, 58, 30, ID_TRESTART);
+    BTN(L"Clear", 240, 314, 46, 30, ID_TCLEAR);
+    BTN(L"File", 290, 314, 48, 30, ID_LOADTXT);
 
     buildPage = PG_INSTR;
-    BTN(L"Magic", 340, 314, 80, 30, ID_MAGIC);
+    BTN(L"Magic", 342, 314, 78, 30, ID_MAGIC);
     SendMessageW(te, EM_SETEVENTMASK, 0, ENM_CHANGE);
 
     buildPage = PG_EDIT;
@@ -2860,6 +2898,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_STOP: stopRec(); break;
         case ID_PLAY: startPlay(); break;
         case ID_TYPE: startType(); break;
+        case ID_LOADTXT: loadTextFile(); break;
         case ID_GO: InterlockedExchange(&goSkip, 1); break;
         case ID_TSTOP: stopAll(); break;
         case ID_CLEAR: if (!busy()) { clearEv(); curFile[0] = 0; idleStatus(); } break;
