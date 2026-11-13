@@ -67,7 +67,7 @@ static DWORD WINAPI DiscoThread(LPVOID a) {
 #define MAXD 8192
 #define ONLINE 150
 
-typedef struct { char id[40], app[20], ver[20], nick[64]; long long first, last; int used, gone, working; } Inst;
+typedef struct { char id[40], app[20], ver[20], nick[64]; long long first, last; int used, gone, working; unsigned char hist[48]; int hn; } Inst;
 typedef struct { int id; char target[40], text[300]; long long created; int used; } Ann;
 
 static Inst g_inst[MAXI]; static int g_ni;
@@ -441,7 +441,7 @@ static void refreshUI(HWND h) {
         MultiByteToWideChar(CP_UTF8, 0, g_inst[i].nick, -1, nk, 64);
         swprintf(col, 80, L"%s v%s", lw, vw);
         subtext(g_list, row, 1, col); subtext(g_list, row, 2, nk);
-        seentext(now - g_inst[i].last, se); subtext(g_list, row, 3, se);
+        seentext(now - g_inst[i].last, se); subtext(g_list, row, 3, se); subtext(g_list, row, 4, L"");
         if (on) { int ix = (int)SendMessageW(g_target, CB_ADDSTRING, 0, (LPARAM)(nk[0] ? nk : col)); SendMessageW(g_target, CB_SETITEMDATA, ix, (LPARAM)i); }
         row++;
     }
@@ -449,6 +449,24 @@ static void refreshUI(HWND h) {
     SendMessageW(g_target, CB_SETCURSEL, keep < 0 ? 0 : keep, 0);
     SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
     RECT hr = {0, 0, 744, 66}; InvalidateRect(h, &hr, FALSE);
+}
+
+/* tiny per-copy activity sparkline: amber=working, green=online, grey=offline, newest at right */
+static void drawSpark(HDC dc, RECT *r, int idx) {
+    int n = g_inst[idx].hn; if (n > 48) n = 48;
+    int W = r->right - r->left - 10, H = r->bottom - r->top - 7;
+    if (W < 8 || H < 4 || n <= 0) return;
+    int x0 = r->left + 5, y0 = r->top + 3;
+    double bw = (double)W / 48.0; if (bw < 1) bw = 1;
+    for (int k = 0; k < n; k++) {
+        int si = (g_inst[idx].hn - n + k) % 48;
+        int lv = g_inst[idx].hist[si];
+        COLORREF c = lv == 2 ? RGB(201, 142, 0) : lv == 1 ? RGB(0, 150, 0) : RGB(182, 192, 205);
+        int bh = lv == 2 ? H : lv == 1 ? (int)(H * 0.58) : 2;
+        int bx = x0 + (int)((48 - n + k) * bw);
+        RECT br = { bx, y0 + (H - bh), bx + (int)(bw + 0.9), y0 + H };
+        HBRUSH hb = CreateSolidBrush(c); FillRect(dc, &br, hb); DeleteObject(hb);
+    }
 }
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
@@ -462,7 +480,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                                  14, 76, 704, 210, h, (HMENU)IDC_LIST, hi, NULL);
         SendMessageW(g_list, WM_SETFONT, (WPARAM)g_ui, TRUE);
         SendMessageW(g_list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-        addcol(g_list, 0, L"Status", 96); addcol(g_list, 1, L"App / version", 180); addcol(g_list, 2, L"Nickname", 190); addcol(g_list, 3, L"Last seen", 110);
+        addcol(g_list, 0, L"Status", 96); addcol(g_list, 1, L"App / version", 176); addcol(g_list, 2, L"Nickname", 150); addcol(g_list, 3, L"Last seen", 92); addcol(g_list, 4, L"Activity", 86);
         mkctl(h, hi, L"STATIC", L"Nickname for selected copy:", SS_LEFT, 0, 14, 298, 200, 18, 0);
         g_nick = mkctl(h, hi, L"EDIT", L"", 0, WS_EX_CLIENTEDGE, 14, 318, 220, 24, IDC_NICK);
         mkctl(h, hi, L"BUTTON", L"Save name", BS_PUSHBUTTON | WS_TABSTOP, 0, 244, 317, 110, 26, IDC_SAVENK);
@@ -484,6 +502,14 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     } return 0;
     case WM_TIMER:
         if (wp == 2) { KillTimer(h, 2); SetWindowTextW(g_sent, L""); return 0; }
+        { long long now = now_s();
+          EnterCriticalSection(&g_lock);
+          for (int i = 0; i < g_ni; i++) if (g_inst[i].used) {
+              int on = !g_inst[i].gone && now - g_inst[i].last < ONLINE;
+              g_inst[i].hist[g_inst[i].hn % 48] = (unsigned char)(on ? (g_inst[i].working ? 2 : 1) : 0);
+              g_inst[i].hn++;
+          }
+          LeaveCriticalSection(&g_lock); }
         refreshUI(h); return 0;
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
@@ -502,7 +528,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             NMLVCUSTOMDRAW *cd = (NMLVCUSTOMDRAW *)lp;
             switch (cd->nmcd.dwDrawStage) {
             case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
-            case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW;
+            case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW | CDRF_NOTIFYPOSTPAINT;
             case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
                 if (cd->iSubItem == 0) {
                     int i = (int)cd->nmcd.lItemlParam; long long now = now_s(); int on = 0, wk = 0;
@@ -512,6 +538,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                     cd->clrText = wk ? RGB(201, 142, 0) : on ? RGB(0, 150, 0) : RGB(20, 20, 20);
                 } else cd->clrText = RGB(30, 48, 68);
                 return CDRF_DODEFAULT;
+            case CDDS_ITEMPOSTPAINT: {
+                int i = (int)cd->nmcd.lItemlParam;
+                RECT sr; sr.top = 4; sr.left = LVIR_BOUNDS;
+                if (i >= 0 && i < g_ni && SendMessageW(g_list, LVM_GETSUBITEMRECT, cd->nmcd.dwItemSpec, (LPARAM)&sr))
+                    drawSpark(cd->nmcd.hdc, &sr, i);
+                return CDRF_DODEFAULT;
+            }
             }
             return CDRF_DODEFAULT;
         }
