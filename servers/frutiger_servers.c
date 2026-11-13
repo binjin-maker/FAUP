@@ -385,7 +385,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     CreateThread(NULL, 0, ServerThread, (LPVOID)(INT_PTR)srv, 0, NULL);
 
     WNDCLASSW wc = {0}; wc.lpfnWndProc = WndProc; wc.hInstance = hi; wc.lpszClassName = L"FrutigerServers";
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW); RegisterClassW(&wc);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(1)); RegisterClassW(&wc);
     g_win = CreateWindowExW(0, L"FrutigerServers", L"Frutiger Servers",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, 440, 190, NULL, NULL, hi, NULL);
     CreateWindowExW(0, L"BUTTON", L"Open dashboard", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,

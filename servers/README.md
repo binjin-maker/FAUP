@@ -8,7 +8,7 @@ Just run `FrutigerServers.exe` (Windows, no install). It opens the dashboard at 
 
 Build it yourself from `frutiger_servers.c`:
 ```
-python -m ziglang cc -target x86_64-windows-gnu -O2 -s -o FrutigerServers.exe frutiger_servers.c \
+python -m ziglang cc -target x86_64-windows-gnu -O2 -s -o FrutigerServers.exe frutiger_servers.c servers.rc \
   -Wl,--subsystem,windows -lws2_32 -luser32 -lgdi32 -lshell32
 ```
 
