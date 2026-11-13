@@ -4,6 +4,7 @@
 #define CINTERFACE
 #define COBJMACROS
 #include <windows.h>
+#include <winsock2.h>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <mmsystem.h>
@@ -686,8 +687,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.14"
-#define APP_VERSION_W L"1.14.14"
+#define APP_VERSION   "1.14.15"
+#define APP_VERSION_W L"1.14.15"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1725,6 +1726,45 @@ static int runActivation(HINSTANCE hi) {
 }
 
 static wchar_t annText[600], annIdW[16];
+
+/* ---- find the Frutiger Server on the local network (zero-config) ---- */
+static wchar_t gDiscoUrl[200]; static DWORD gDiscoAt;
+static int discoverServer(wchar_t *out, int n) {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return 0;
+    int yes = 1; setsockopt(s, SOL_SOCKET, SO_BROADCAST, (char *)&yes, sizeof yes);
+    DWORD to = 350; setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&to, sizeof to);
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons(8788); a.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    const char *msg = "FRUTIGER-DISCOVER";
+    sendto(s, msg, (int)strlen(msg), 0, (struct sockaddr *)&a, sizeof a);
+    char buf[64]; struct sockaddr_in from; int fl = sizeof from, ok = 0;
+    int r = recvfrom(s, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl);
+    if (r > 0) {
+        buf[r] = 0;
+        if (!strncmp(buf, "FRUTIGER-SERVER", 15)) {
+            int port = 8787; sscanf(buf + 15, "%d", &port);
+            unsigned char *p = (unsigned char *)&from.sin_addr;
+            swprintf(out, n, L"http://%u.%u.%u.%u:%d/beat", p[0], p[1], p[2], p[3], port);
+            ok = 1;
+        }
+    }
+    closesocket(s);
+    return ok;
+}
+/* ini [Servers] Url wins (for internet/manual); else LAN discovery; else localhost */
+static void resolveServerUrl(wchar_t *out, int n) {
+    wchar_t ini[200]; GetPrivateProfileStringW(L"Servers", L"Url", L"", ini, 200, iniPath);
+    if (ini[0]) { wcsncpy(out, ini, n); out[n - 1] = 0; return; }
+    if (!gDiscoUrl[0] || GetTickCount() - gDiscoAt > 60000) {
+        wchar_t found[200];
+        if (discoverServer(found, 200)) wcscpy(gDiscoUrl, found);
+        else if (!gDiscoUrl[0]) wcscpy(gDiscoUrl, DEFAULT_SERVERS_URL);
+        gDiscoAt = GetTickCount();
+    }
+    wcsncpy(out, gDiscoUrl, n); out[n - 1] = 0;
+}
+
 static DWORD WINAPI BeatThread(LPVOID arg) {
     wchar_t *u = arg;
     HINTERNET in = InternetOpenW(L"FrutigerAstro/" APP_VERSION_W, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -1751,7 +1791,7 @@ static DWORD WINAPI BeatThread(LPVOID arg) {
 
 static void beat(const wchar_t *ev) {
     if (rcState == 2) return;
-    GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, teleUrl, 300, iniPath);
+    resolveServerUrl(teleUrl, 300);
     if (!teleUrl[0]) return;
     wchar_t *u = malloc(440 * sizeof(wchar_t));
     swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=%s",
@@ -1761,7 +1801,7 @@ static void beat(const wchar_t *ev) {
 
 /* Synchronous goodbye on exit so the copy flips to Offline immediately. */
 static void beatClose(void) {
-    wchar_t url[300]; GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, url, 300, iniPath);
+    wchar_t url[300]; resolveServerUrl(url, 300);
     if (!url[0] || !installId[0]) return;
     wchar_t u[440];
     swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=offline",
@@ -1778,7 +1818,7 @@ static void beatClose(void) {
 }
 
 static void serverSub(const wchar_t *tail, wchar_t *out, int n) {
-    wchar_t base[320]; GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, base, 320, iniPath);
+    wchar_t base[320]; resolveServerUrl(base, 320);
     wchar_t *sl = wcsrchr(base, L'/'); if (sl) sl[1] = 0; swprintf(out, n, L"%s%s", base, tail);
 }
 static DWORD WINAPI DismissThread(LPVOID arg) {
@@ -3171,6 +3211,9 @@ static void runSplash(HINSTANCE hi) {
 
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     (void)hp; (void)cmd;
+#ifndef ASTRO_BETA
+    { WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa); }
+#endif
     SetProcessDPIAware();
     INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_HOTKEY_CLASS | ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES };
     InitCommonControlsEx(&icc);

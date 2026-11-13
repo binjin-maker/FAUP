@@ -26,7 +26,7 @@ HOME_REPO = "binjin-maker/FAUP"
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 C_FILE = SRC / "FrutigerMacro.c"
-LIBS = ["user32", "gdi32", "comdlg32", "comctl32", "winmm", "dwmapi", "uxtheme", "wininet", "bcrypt", "shell32"]
+LIBS = ["user32", "gdi32", "comdlg32", "comctl32", "winmm", "dwmapi", "uxtheme", "wininet", "bcrypt", "shell32", "ws2_32"]
 KEEP_NOTES = 10
 
 CHANNELS = {

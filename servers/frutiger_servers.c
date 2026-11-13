@@ -23,6 +23,45 @@ static char *nexttok(char **s, char sep) {
 }
 
 #define PORT 8787
+#define DISCO_PORT 8788
+static char g_addr[32] = "127.0.0.1";
+
+/* best-effort primary LAN IP (no packets sent) */
+static void find_local_ip(void) {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return;
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons(53); a.sin_addr.s_addr = inet_addr("8.8.8.8");
+    if (connect(s, (struct sockaddr *)&a, sizeof a) == 0) {
+        struct sockaddr_in me; int ml = sizeof me;
+        if (getsockname(s, (struct sockaddr *)&me, &ml) == 0) {
+            unsigned char *p = (unsigned char *)&me.sin_addr;
+            snprintf(g_addr, sizeof g_addr, "%u.%u.%u.%u", p[0], p[1], p[2], p[3]);
+        }
+    }
+    closesocket(s);
+}
+
+/* answer LAN discovery pings: a copy broadcasts, we reply so it learns our address+port */
+static DWORD WINAPI DiscoThread(LPVOID a) {
+    (void)a;
+    SOCKET u = socket(AF_INET, SOCK_DGRAM, 0);
+    if (u == INVALID_SOCKET) return 0;
+    int yes = 1; setsockopt(u, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof yes);
+    struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET; sa.sin_port = htons(DISCO_PORT); sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(u, (struct sockaddr *)&sa, sizeof sa)) { closesocket(u); return 0; }
+    for (;;) {
+        char buf[64]; struct sockaddr_in from; int fl = sizeof from;
+        int n = recvfrom(u, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl);
+        if (n <= 0) continue;
+        buf[n] = 0;
+        if (!strncmp(buf, "FRUTIGER-DISCOVER", 17)) {
+            char reply[32]; int rn = snprintf(reply, sizeof reply, "FRUTIGER-SERVER %d", PORT);
+            sendto(u, reply, rn, 0, (struct sockaddr *)&from, fl);
+        }
+    }
+}
 #define MAXI 1024
 #define MAXA 256
 #define MAXD 8192
@@ -529,7 +568,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         SelectObject(dc, g_ui); SetTextColor(dc, RGB(230, 245, 255));
         RECT t2 = {0, 24, rc.right - 18, 44}; DrawTextW(dc, st, -1, &t2, DT_RIGHT | DT_SINGLELINE);
         SelectObject(dc, g_small); SetTextColor(dc, RGB(216, 239, 252));
-        RECT t3 = {20, 46, rc.right - 150, 62}; DrawTextW(dc, L"Astro copies check in every 10s · Online within ~15s, Offline right after close", -1, &t3, DT_LEFT | DT_SINGLELINE);
+        wchar_t waddr[32], note[160]; MultiByteToWideChar(CP_UTF8, 0, g_addr, -1, waddr, 32);
+        swprintf(note, 160, L"Serving at http://%s:%d · copies on this network connect automatically · check-in every 10s", waddr, PORT);
+        RECT t3 = {20, 46, rc.right - 150, 62}; DrawTextW(dc, note, -1, &t3, DT_LEFT | DT_SINGLELINE);
         EndPaint(h, &ps);
     } return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -549,12 +590,14 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     SOCKET srv = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1; setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof yes);
     struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET; sa.sin_port = htons(PORT); sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sa.sin_family = AF_INET; sa.sin_port = htons(PORT); sa.sin_addr.s_addr = htonl(INADDR_ANY);   /* reachable from other devices on the network */
     if (bind(srv, (struct sockaddr *)&sa, sizeof sa) || listen(srv, 16)) {
         MessageBoxW(NULL, L"Port 8787 is already in use. Is Frutiger Servers already running?", L"Frutiger Servers", MB_ICONWARNING);
         return 1;
     }
     CreateThread(NULL, 0, ServerThread, (LPVOID)(INT_PTR)srv, 0, NULL);
+    find_local_ip();
+    CreateThread(NULL, 0, DiscoThread, NULL, 0, NULL);
 
     WNDCLASSW wc = {0}; wc.lpfnWndProc = WndProc; wc.hInstance = hi; wc.lpszClassName = L"FrutigerServers";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(1)); wc.hbrBackground = NULL;
