@@ -1,6 +1,6 @@
 {
-  "version": "1.14.8",
-  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/8d2d7081035b429b6012026e8723357e1b76ab91/update/FrutigerAstro.exe",
-  "sha256": "89a07cd4e2e7cf235de8a2c01bc62de4cec27faa0db16e85fc5b0b9c70a9eea4",
-  "notes": "1.14.8\n- Activation on first launch; Frutiger Astro splash; opens on Recorder tab\n- Auto-check and auto-install both on by default\n- Restart jumps the typing cursor back to the start\n\n1.14.7\n- Simpler Update tab: a status light, your version and how the update is going\n- A little status light on the Update tab button\n- Restart now stops typing and jumps back to the start instead of retyping\n\n1.14.6\n- Updates now install right from the Update tab\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
+  "version": "1.14.9",
+  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/666246a1fcdc31938c9478620a2019a2d441a888/update/FrutigerAstro.exe",
+  "sha256": "ac9705713768107030c822b3f0074f2493e411c7e871e14d4e7fa6782123d94a",
+  "notes": "1.14.9\n- Announcements and changelog notices, so we can keep you posted\n- Behind-the-scenes safety improvements\n- Fixes and polish\n\n1.14.8\n- Activation on first launch; Frutiger Astro splash; opens on Recorder tab\n- Auto-check and auto-install both on by default\n- Restart jumps the typing cursor back to the start\n\n1.14.7\n- Simpler Update tab: a status light, your version and how the update is going\n- A little status light on the Update tab button\n- Restart now stops typing and jumps back to the start instead of retyping\n\n1.14.6\n- Updates now install right from the Update tab\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
 }
