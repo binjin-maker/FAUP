@@ -28,7 +28,7 @@ static char *nexttok(char **s, char sep) {
 #define MAXD 8192
 #define ONLINE 150
 
-typedef struct { char id[40], app[20], ver[20], nick[64]; long long first, last; int used; } Inst;
+typedef struct { char id[40], app[20], ver[20], nick[64]; long long first, last; int used, gone, working; } Inst;
 typedef struct { int id; char target[40], text[300]; long long created; int used; } Ann;
 
 static Inst g_inst[MAXI]; static int g_ni;
@@ -290,12 +290,18 @@ static void handle(SOCKET c) {
 
     EnterCriticalSection(&g_lock);
     if (!strcmp(path, "/beat")) {
-        char id[40], app[20], ver[20];
-        qget(q, "id", id, sizeof id); qget(q, "app", app, sizeof app); qget(q, "ver", ver, sizeof ver);
+        char id[40], app[20], ver[20], ev[24];
+        qget(q, "id", id, sizeof id); qget(q, "app", app, sizeof app); qget(q, "ver", ver, sizeof ver); qget(q, "event", ev, sizeof ev);
         if (id[0]) {
             Inst *it = find_inst(id);
             if (!it && g_ni < MAXI) { it = &g_inst[g_ni++]; memset(it, 0, sizeof *it); it->used = 1; strncpy(it->id, id, 39); it->first = now_s(); }
-            if (it) { strncpy(it->app, app[0] ? app : "astro", 19); strncpy(it->ver, ver[0] ? ver : "?", 19); it->last = now_s(); save_locked(); }
+            if (it) {
+                strncpy(it->app, app[0] ? app : "astro", 19); strncpy(it->ver, ver[0] ? ver : "?", 19);
+                it->last = now_s();
+                it->gone = !strcmp(ev, "offline");
+                it->working = !strcmp(ev, "working");
+                save_locked();
+            }
         }
         char text[300]; int a = id[0] ? pending_ann(id, text, sizeof text) : 0;
         Buf b = {0};
@@ -352,8 +358,9 @@ static DWORD WINAPI ServerThread(LPVOID arg) {
 #define IDC_RCETA 108
 #define IDC_RCCOPY 109
 
-static HFONT g_ui, g_hdr;
+static HFONT g_ui, g_hdr, g_small;
 static HWND g_list, g_nick, g_annedit, g_target, g_rcver, g_rcmsg, g_rceta;
+static int g_sel = -1;   /* instance index of the selected copy, kept even when the list loses focus */
 
 static HWND mkctl(HWND h, HINSTANCE hi, const wchar_t *cls, const wchar_t *txt, DWORD st, DWORD ex, int x, int y, int w, int hh, int id) {
     HWND c = CreateWindowExW(ex, cls, txt, WS_CHILD | WS_VISIBLE | st, x, y, w, hh, h, (HMENU)(INT_PTR)id, hi, NULL);
@@ -383,9 +390,10 @@ static void refreshUI(HWND h) {
     EnterCriticalSection(&g_lock);
     int row = 0;
     for (int i = 0; i < g_ni; i++) if (g_inst[i].used) {
-        int on = now - g_inst[i].last < ONLINE;
+        int on = !g_inst[i].gone && now - g_inst[i].last < ONLINE;
+        int wk = on && g_inst[i].working;
         LVITEMW it = {0}; it.mask = LVIF_TEXT | LVIF_PARAM; it.iItem = row; it.lParam = i;
-        it.pszText = on ? L"● Online" : L"○ Offline";
+        it.pszText = wk ? L"\x25CF Working" : on ? L"\x25CF Online" : L"\x25CF Offline";
         SendMessageW(g_list, LVM_INSERTITEMW, 0, (LPARAM)&it);
         const char *lbl = !strcmp(g_inst[i].app, "beta") ? "Astro Beta" : "Frutiger Astro";
         wchar_t lw[40], vw[24], col[80], nk[64], se[24];
@@ -410,6 +418,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         HINSTANCE hi = ((LPCREATESTRUCTW)lp)->hInstance;
         g_ui = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         g_hdr = CreateFontW(-24, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_small = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         g_list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
                                  14, 76, 704, 210, h, (HMENU)IDC_LIST, hi, NULL);
         SendMessageW(g_list, WM_SETFONT, (WPARAM)g_ui, TRUE);
@@ -434,28 +443,46 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         refreshUI(h);
     } return 0;
     case WM_TIMER: refreshUI(h); return 0;
-    case WM_NOTIFY:
-        if (((NMHDR *)lp)->idFrom == IDC_LIST && ((NMHDR *)lp)->code == LVN_ITEMCHANGED) {
+    case WM_NOTIFY: {
+        NMHDR *nh = (NMHDR *)lp;
+        if (nh->idFrom == IDC_LIST && nh->code == LVN_ITEMCHANGED) {
             int sel = (int)SendMessageW(g_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
             if (sel >= 0) {
                 LVITEMW it = {0}; it.mask = LVIF_PARAM; it.iItem = sel; SendMessageW(g_list, LVM_GETITEMW, 0, (LPARAM)&it);
-                int idx = (int)it.lParam; wchar_t nk[64] = L"";
+                int idx = (int)it.lParam; g_sel = idx; wchar_t nk[64] = L"";
                 EnterCriticalSection(&g_lock); if (idx >= 0 && idx < g_ni && g_inst[idx].used) MultiByteToWideChar(CP_UTF8, 0, g_inst[idx].nick, -1, nk, 64);
                 LeaveCriticalSection(&g_lock);
                 SetWindowTextW(g_nick, nk);
             }
+            break;
+        }
+        if (nh->idFrom == IDC_LIST && nh->code == NM_CUSTOMDRAW) {
+            NMLVCUSTOMDRAW *cd = (NMLVCUSTOMDRAW *)lp;
+            switch (cd->nmcd.dwDrawStage) {
+            case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW;
+            case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
+                if (cd->iSubItem == 0) {
+                    int i = (int)cd->nmcd.lItemlParam; long long now = now_s(); int on = 0, wk = 0;
+                    EnterCriticalSection(&g_lock);
+                    if (i >= 0 && i < g_ni && g_inst[i].used) { on = !g_inst[i].gone && now - g_inst[i].last < ONLINE; wk = on && g_inst[i].working; }
+                    LeaveCriticalSection(&g_lock);
+                    cd->clrText = wk ? RGB(201, 142, 0) : on ? RGB(0, 150, 0) : RGB(20, 20, 20);
+                } else cd->clrText = RGB(30, 48, 68);
+                return CDRF_DODEFAULT;
+            }
+            return CDRF_DODEFAULT;
         }
         break;
+    }
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_SAVENK) {
-            int sel = (int)SendMessageW(g_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
-            if (sel >= 0) {
-                LVITEMW it = {0}; it.mask = LVIF_PARAM; it.iItem = sel; SendMessageW(g_list, LVM_GETITEMW, 0, (LPARAM)&it);
-                int idx = (int)it.lParam; wchar_t nk[64]; GetWindowTextW(g_nick, nk, 64);
-                char na[96]; WideCharToMultiByte(CP_UTF8, 0, nk, -1, na, 96, 0, 0);
-                EnterCriticalSection(&g_lock); if (idx >= 0 && idx < g_ni && g_inst[idx].used) { strncpy(g_inst[idx].nick, na, 63); g_inst[idx].nick[63] = 0; save_locked(); }
-                LeaveCriticalSection(&g_lock); refreshUI(h);
-            }
+            int idx = g_sel;   /* the copy picked in the list, remembered even after you click into the box */
+            if (idx < 0) { MessageBoxW(h, L"Pick a copy in the list first, then type a nickname.", L"Frutiger Servers", MB_ICONINFORMATION); return 0; }
+            wchar_t nk[64]; GetWindowTextW(g_nick, nk, 64);
+            char na[96]; WideCharToMultiByte(CP_UTF8, 0, nk, -1, na, 96, 0, 0);
+            EnterCriticalSection(&g_lock); if (idx >= 0 && idx < g_ni && g_inst[idx].used) { strncpy(g_inst[idx].nick, na, 63); g_inst[idx].nick[63] = 0; save_locked(); }
+            LeaveCriticalSection(&g_lock); refreshUI(h);
             return 0;
         }
         if (LOWORD(wp) == IDC_SEND) {
@@ -496,11 +523,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         RECT t1 = {18, 10, rc.right, 48}; DrawTextW(dc, L"Frutiger Servers", -1, &t1, DT_LEFT | DT_SINGLELINE);
         long long now = now_s(); int on = 0, tot = 0;
         EnterCriticalSection(&g_lock);
-        for (int i = 0; i < g_ni; i++) if (g_inst[i].used) { tot++; if (now - g_inst[i].last < ONLINE) on++; }
+        for (int i = 0; i < g_ni; i++) if (g_inst[i].used) { tot++; if (!g_inst[i].gone && now - g_inst[i].last < ONLINE) on++; }
         LeaveCriticalSection(&g_lock);
         wchar_t st[64]; swprintf(st, 64, L"Active %d  ·  Installs %d", on, tot);
         SelectObject(dc, g_ui); SetTextColor(dc, RGB(230, 245, 255));
         RECT t2 = {0, 24, rc.right - 18, 44}; DrawTextW(dc, st, -1, &t2, DT_RIGHT | DT_SINGLELINE);
+        SelectObject(dc, g_small); SetTextColor(dc, RGB(216, 239, 252));
+        RECT t3 = {20, 46, rc.right - 150, 62}; DrawTextW(dc, L"Astro copies check in every 10s · Online within ~15s, Offline right after close", -1, &t3, DT_LEFT | DT_SINGLELINE);
         EndPaint(h, &ps);
     } return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;

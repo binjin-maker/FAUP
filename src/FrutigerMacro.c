@@ -665,8 +665,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.11"
-#define APP_VERSION_W L"1.14.11"
+#define APP_VERSION   "1.14.12"
+#define APP_VERSION_W L"1.14.12"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1693,6 +1693,24 @@ static void beat(const wchar_t *ev) {
     CloseHandle(CreateThread(NULL, 0, BeatThread, u, 0, NULL));
 }
 
+/* Synchronous goodbye on exit so the copy flips to Offline immediately. */
+static void beatClose(void) {
+    wchar_t url[300]; GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, url, 300, iniPath);
+    if (!url[0] || !installId[0]) return;
+    wchar_t u[440];
+    swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=offline",
+             url, wcschr(url, L'?') ? L'&' : L'?', installId, APP_VERSION_W);
+    HINTERNET in = InternetOpenW(L"FrutigerAstro/" APP_VERSION_W, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (in) {
+        DWORD to = 1500;
+        InternetSetOptionW(in, INTERNET_OPTION_CONNECT_TIMEOUT, &to, sizeof to);
+        InternetSetOptionW(in, INTERNET_OPTION_RECEIVE_TIMEOUT, &to, sizeof to);
+        HINTERNET hh = InternetOpenUrlW(in, u, NULL, 0, INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_RELOAD, 0);
+        if (hh) InternetCloseHandle(hh);
+        InternetCloseHandle(in);
+    }
+}
+
 static void serverSub(const wchar_t *tail, wchar_t *out, int n) {
     wchar_t base[320]; GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, base, 320, iniPath);
     wchar_t *sl = wcsrchr(base, L'/'); if (sl) sl[1] = 0; swprintf(out, n, L"%s%s", base, tail);
@@ -1704,31 +1722,67 @@ static DWORD WINAPI DismissThread(LPVOID arg) {
     free(u); return 0;
 }
 static HWND hAnn, hAnnText;
+static void annDismiss(HWND h) {
+    wchar_t key[20]; swprintf(key, 20, L"d%s", annIdW);
+    WritePrivateProfileStringW(L"Announce", key, L"1", iniPath);
+    wchar_t *u = malloc(500 * sizeof(wchar_t)); wchar_t sub[360]; serverSub(L"dismiss", sub, 360);
+    if (sub[0]) { swprintf(u, 500, L"%s?id=%s&ann=%s", sub, installId, annIdW); CloseHandle(CreateThread(NULL, 0, DismissThread, u, 0, NULL)); } else free(u);
+    DestroyWindow(h); hAnn = NULL;
+}
 static LRESULT CALLBACK AnnProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
-    if (m == WM_COMMAND && LOWORD(wp) == ID_ANNDISMISS) {
-        wchar_t key[20]; swprintf(key, 20, L"d%s", annIdW);
-        WritePrivateProfileStringW(L"Announce", key, L"1", iniPath);
-        wchar_t *u = malloc(500 * sizeof(wchar_t)); wchar_t sub[360]; serverSub(L"dismiss", sub, 360);
-        if (sub[0]) { swprintf(u, 500, L"%s?id=%s&ann=%s", sub, installId, annIdW); CloseHandle(CreateThread(NULL, 0, DismissThread, u, 0, NULL)); } else free(u);
-        DestroyWindow(h); hAnn = NULL; return 0;
+    switch (m) {
+    case WM_COMMAND:
+        if (LOWORD(wp) == ID_ANNDISMISS) { annDismiss(h); return 0; }
+        break;
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)lp;
+        if (d->CtlID == ID_ANNDISMISS) {
+            RECT r = d->rcItem; int pr = (d->itemState & ODS_SELECTED) ? 1 : 0, bh = r.bottom - r.top;
+            for (int y = 0; y < bh; y++) { double t = (double)y / bh;
+                int cr = (int)(40 + 20 * t), cg = (int)((pr ? 118 : 150) + 38 * t), cb = (int)((pr ? 178 : 205) + 34 * t);
+                HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = { r.left, r.top + y, r.right, r.top + y + 1 }; FillRect(d->hDC, &ln, br); DeleteObject(br); }
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(26, 111, 174)); HGDIOBJ op = SelectObject(d->hDC, pen), ob = SelectObject(d->hDC, GetStockObject(NULL_BRUSH));
+            RoundRect(d->hDC, r.left, r.top, r.right, r.bottom, 10, 10); SelectObject(d->hDC, op); SelectObject(d->hDC, ob); DeleteObject(pen);
+            SetBkMode(d->hDC, TRANSPARENT); SelectObject(d->hDC, hBold); SetTextColor(d->hDC, RGB(255, 255, 255));
+            DrawTextW(d->hDC, L"Dismiss", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+        break;
     }
-    if (m == WM_CTLCOLORSTATIC) { SetBkColor((HDC)wp, RGB(255,255,255)); return (LRESULT)GetStockObject(WHITE_BRUSH); }
-    if (m == WM_DESTROY) { hAnn = NULL; return 0; }
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT rc; GetClientRect(h, &rc);
+        int W = rc.right, H = rc.bottom, HD = 44;
+        for (int y = 0; y < H; y++) { double t = (double)y / H; int cr = (int)(205 + 33 * t), cg = (int)(230 + 18 * t), cb = (int)(248 + 7 * t);
+            HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = { 0, y, W, y + 1 }; FillRect(dc, &ln, br); DeleteObject(br); }
+        for (int y = 0; y < HD; y++) { double t = (double)y / HD; int cr = (int)(22 + 120 * t), cg = (int)(136 + 90 * t), cb = (int)(214 + 36 * t);
+            HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = { 0, y, W, y + 1 }; FillRect(dc, &ln, br); DeleteObject(br); }
+        SetBkMode(dc, TRANSPARENT);
+        SelectObject(dc, hBold); SetTextColor(dc, RGB(24, 70, 112)); RECT s1 = { 19, 13, W - 16, HD }; DrawTextW(dc, APP_NAME_W, -1, &s1, DT_LEFT | DT_SINGLELINE);
+        SetTextColor(dc, RGB(255, 255, 255)); RECT s2 = { 18, 12, W - 16, HD }; DrawTextW(dc, APP_NAME_W, -1, &s2, DT_LEFT | DT_SINGLELINE);
+        SelectObject(dc, hFont); SetTextColor(dc, NAVY); RECT tm = { 18, HD + 14, W - 18, H - 58 }; DrawTextW(dc, annText, -1, &tm, DT_LEFT | DT_WORDBREAK);
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(120, 170, 210)); HGDIOBJ op = SelectObject(dc, pen), ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, 0, 0, W, H, 18, 18); SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+        EndPaint(h, &ps);
+    } return 0;
+    case WM_DESTROY: hAnn = NULL; return 0;
+    }
     return DefWindowProcW(h, m, wp, lp);
 }
 static void showAnnounce(void) {
-    if (hAnn) { SetWindowTextW(hAnnText, annText); SetForegroundWindow(hAnn); return; }
+    if (hAnn) { InvalidateRect(hAnn, NULL, TRUE); SetWindowPos(hAnn, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); SetForegroundWindow(hAnn); return; }
     static int reg = 0;
-    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = AnnProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogAnn"; c.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(2)); c.hCursor = LoadCursor(NULL, IDC_ARROW); c.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); RegisterClassW(&c); reg = 1; }
+    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = AnnProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogAnn"; c.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(2)); c.hCursor = LoadCursor(NULL, IDC_ARROW); c.hbrBackground = NULL; RegisterClassW(&c); reg = 1; }
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int W = 380, H = 200;
-    hAnn = CreateWindowExW(WS_EX_TOPMOST, L"DoogAnn", L"Frutiger Astro", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+    hAnn = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"DoogAnn", APP_NAME_W, WS_POPUP,
         wa.right - W - 24, wa.bottom - H - 24, W, H, NULL, NULL, GetModuleHandleW(NULL), NULL);
-    hAnnText = CreateWindowExW(0, L"STATIC", annText, WS_CHILD | WS_VISIBLE, 18, 16, W - 36, H - 90, hAnn, NULL, GetModuleHandleW(NULL), NULL);
-    SendMessageW(hAnnText, WM_SETFONT, (WPARAM)hFont, TRUE);
-    HWND d = CreateWindowExW(0, L"BUTTON", L"Dismiss", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, W / 2 - 50, H - 66, 100, 30, hAnn, (HMENU)ID_ANNDISMISS, GetModuleHandleW(NULL), NULL);
-    SendMessageW(d, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SetWindowRgn(hAnn, CreateRoundRectRgn(0, 0, W + 1, H + 1, 18, 18), TRUE);
+    HWND d = CreateWindowExW(0, L"BUTTON", L"Dismiss", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, W / 2 - 56, H - 50, 112, 32, hAnn, (HMENU)ID_ANNDISMISS, GetModuleHandleW(NULL), NULL);
+    SendMessageW(d, WM_SETFONT, (WPARAM)hBold, TRUE);
     ShowWindow(hAnn, SW_SHOW);
+    SetWindowPos(hAnn, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    SetForegroundWindow(hAnn);
 }
 #endif
 
@@ -1887,7 +1941,10 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         break;
 #ifndef ASTRO_BETA
-    case WM_TIMER: if (wp == 9) beat(L"ping"); return 0;
+    case WM_TIMER:
+        if (wp == 9) { beat(busy() ? L"working" : L"ping"); return 0; }
+        if (wp == 10) { static LONG wasBusy = -1; LONG b = busy() ? 1 : 0; if (b != wasBusy) { wasBusy = b; beat(b ? L"working" : L"ping"); } return 0; }
+        return 0;
 #endif
     case WM_NCCALCSIZE: if (wp) return 0; break;
     case WM_NCACTIVATE: return DefWindowProcW(h, m, wp, -1);
@@ -1924,7 +1981,11 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         paintFrame(dc);
         EndPaint(h, &ps);
     } return 0;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DESTROY:
+#ifndef ASTRO_BETA
+        beatClose();
+#endif
+        PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, m, wp, lp);
 }
@@ -3102,7 +3163,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     if (tog[TG_UCHECK].on) startCheck(); else { updState = US_IDLE; updSync(); }
 #ifndef ASTRO_BETA
     beat(L"launch");
-    SetTimer(hFrame, 9, 300000, NULL);
+    SetTimer(hFrame, 9, 10000, NULL);   /* heartbeat: online/working every 10s */
+    SetTimer(hFrame, 10, 1000, NULL);   /* watch busy-state; beat the instant it flips */
 #endif
     runSplash(hi);
     ShowWindow(hFrame, show);
