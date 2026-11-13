@@ -41,7 +41,7 @@ enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID
        ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT, ID_DIFFFIX, ID_NAVMS, ID_DEDITS,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
-       ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES,
+       ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES, ID_BREAKERS,
        ID_TEST = 501, ID_TRESTART, ID_TCLEAR, ID_TNEW, ID_TFIN, ID_TAPPLY, ID_TCLOSE, ID_TEDIT,
        ID_HK0 = 301, ID_HK1, ID_HK2, ID_HK3, ID_HKAPPLY, ID_STATUS = 400 };
 
@@ -56,7 +56,10 @@ static WORD hkVal[HK_N] = { VK_F9, VK_F10, VK_F11, VK_F8, (WORD)('V' | ((HOTKEYF
 static HWND hMain, hFrame, hBtn[HK_N], hHk[HK_N];
 static HHOOK hkKb, hkMs;
 static Ev *ev; static int nev, cap;
-static int night;   /* night (dark) theme */
+static int night;   /* night (dark) theme — driven by brk[BRK_NIGHT] */
+/* ---- Breakers: small cosmetic switches on the Update tab ---- */
+enum { BRK_NIGHT, BRK_TRAY, BRK_SPLASH, BRK_BUBBLES, BRK_CONFIRM, BRK_N };
+static int brk[BRK_N] = { 0, 1, 1, 1, 0 };   /* night off, tray/splash/bubbles on, confirm off */
 static volatile LONG recording, playing, typing, stopFlag;
 static volatile LONG goSkip, inBreak, paused;
 static double pausedTotal, pauseT0;
@@ -702,8 +705,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.18"
-#define APP_VERSION_W L"1.14.18"
+#define APP_VERSION   "1.14.19"
+#define APP_VERSION_W L"1.14.19"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -739,6 +742,7 @@ static int updLight(void) {
     static const int L[] = { 0x2b9be6, 0x34c23a, 0xf5b31a, 0x2b9be6, 0x2b9be6, 0xe0483a, 0xe0483a, 0xe0483a, 0x9aa8b8 };
     return L[(int)updState];
 }
+static void saveBreakers(void);
 static wchar_t exePath[MAX_PATH];
 static void saveSettings(void);
 static int busy(void);
@@ -1037,7 +1041,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_NIGHT, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -1050,7 +1054,6 @@ static Tog tog[TG_N] = {
     { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
     { L"Auto-go",               PG_WINLAN,  20, 283,  84, 0, 0 },
     { L"Humanize play",         PG_MACRO,  272, 127, 148, 0, 0 },
-    { L"Night mode",            PG_UPDATE, 322, 322, 100, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1104,7 +1107,8 @@ static void renderSky(Canvas *c) {
         { 0.12f, 0.70f, 22 }, { 0.88f, 0.72f, 12 }, { 0.50f, 0.03f, 8 },  { 0.30f, 0.20f, 6 },  { 0.70f, 0.38f, 9 },
         { 0.02f, 0.92f, 30 }, { 0.62f, 0.95f, 16 }, { 0.38f, 0.60f, 7 },  { 0.97f, 0.97f, 20 }, { 0.22f, 0.98f, 10 },
     };
-    for (unsigned i = 0; i < sizeof BUB / sizeof BUB[0]; i++) bubble(c, BUB[i][0] * W, BUB[i][1] * H, S((int)BUB[i][2]));
+    if (brk[BRK_BUBBLES])
+        for (unsigned i = 0; i < sizeof BUB / sizeof BUB[0]; i++) bubble(c, BUB[i][0] * W, BUB[i][1] * H, S((int)BUB[i][2]));
 }
 
 static void renderPages(void) {
@@ -2211,7 +2215,7 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT) r->top = r->bottom - nh; else r->bottom = r->top + nh;
     } return TRUE;
     case WM_SIZE:
-        if (wp == SIZE_MINIMIZED) { wasMin = 1; if (trayAdd()) ShowWindow(h, SW_HIDE); }
+        if (wp == SIZE_MINIMIZED) { wasMin = 1; saveBreakers(); if (brk[BRK_TRAY] && trayAdd()) ShowWindow(h, SW_HIDE); }
         else if (wasMin) { wasMin = 0; showPage(PG_MACRO); }
         if (sizing) InvalidateRect(h, NULL, FALSE);
         break;
@@ -2278,6 +2282,11 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             else if (cmd == 2) { trayRemove(); DestroyWindow(h); }
         }
         return 0;
+    case WM_CLOSE:
+        if (brk[BRK_CONFIRM] &&
+            MessageBoxW(h, L"Close Frutiger Astro?", L"Frutiger Astro", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+            return 0;
+        DestroyWindow(h); return 0;
     case WM_DESTROY:
         trayRemove();
 #ifndef ASTRO_BETA
@@ -2961,7 +2970,8 @@ static void buildUI(void) {
 
     buildPage = PG_UPDATE;
     mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 388, 70, ID_UNOTES);
-    BTN(L"Check for updates", 130, 316, 180, 30, ID_UACTION);
+    BTN(L"Check for updates", 110, 316, 170, 30, ID_UACTION);
+    BTN(L"Breakers", 288, 316, 132, 30, ID_BREAKERS);
 
     buildPage = PG_TEST;
     HWND ed = mk(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 20, 202, 400, 110, ID_TEDIT);
@@ -3032,7 +3042,18 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
     { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" }, { ID_NAVMS, L"FixNavMs" }, { ID_DEDITS, L"FixEdits" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay", L"Night" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay" };
+
+static const wchar_t *BRKKEY[BRK_N] = { L"Night", L"Tray", L"Splash", L"Bubbles", L"ConfirmExit" };
+static void loadBreakers(void) {
+    int oldNight = GetPrivateProfileIntW(L"Settings", L"Night", 0, iniPath);  /* migrate pre-1.14.19 */
+    int def[BRK_N] = { oldNight, 1, 1, 1, 0 };
+    for (int i = 0; i < BRK_N; i++) brk[i] = GetPrivateProfileIntW(L"Breakers", BRKKEY[i], def[i], iniPath) != 0;
+    night = brk[BRK_NIGHT];
+}
+static void saveBreakers(void) {
+    for (int i = 0; i < BRK_N; i++) WritePrivateProfileStringW(L"Breakers", BRKKEY[i], brk[i] ? L"1" : L"0", iniPath);
+}
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -3040,7 +3061,7 @@ static void loadSettings(void) {
         if (GetPrivateProfileStringW(L"Settings", SAVED[i].key, L"\x01", b, 64, iniPath) && b[0] != 1)
             SetDlgItemTextW(hMain, SAVED[i].id, b);
     for (int i = 0; i < TG_N; i++) tog[i].on = GetPrivateProfileIntW(L"Settings", TOGKEY[i], tog[i].on, iniPath) != 0;
-    night = tog[TG_NIGHT].on;
+    loadBreakers();
 }
 
 static void saveSettings(void) {
@@ -3050,6 +3071,7 @@ static void saveSettings(void) {
         WritePrivateProfileStringW(L"Settings", SAVED[i].key, b, iniPath);
     }
     for (int i = 0; i < TG_N; i++) WritePrivateProfileStringW(L"Settings", TOGKEY[i], tog[i].on ? L"1" : L"0", iniPath);
+    saveBreakers();
 }
 
 static void applyTest(void) {
@@ -3078,10 +3100,96 @@ static void clickToggle(int mx, int my) {
         if (mx < r.left || mx >= r.right || my < r.top || my >= r.bottom) continue;
         if (tog[i].radio) { for (int k = 0; k < TG_N; k++) if (tog[k].radio) tog[k].on = 0; tog[i].on = 1; }
         else tog[i].on = !tog[i].on;
-        if (i == TG_NIGHT) { night = tog[TG_NIGHT].on; applyTextTheme(); renderPages(); InvalidateRect(hFrame, NULL, FALSE); }
         InvalidateRect(hMain, NULL, FALSE);
         return;
     }
+}
+
+/* ---------- breaker panel (Update tab) ---------- */
+static const wchar_t *BRKNAME[BRK_N] = { L"Night mode", L"Minimize to tray", L"Startup splash", L"Background bubbles", L"Confirm before exit" };
+static const wchar_t *BRKDESC[BRK_N] = {
+    L"Dark Frutiger sky and panels",
+    L"Tuck into the system tray when minimized",
+    L"Show the loading orb at launch",
+    L"Floating bubbles drifting on the sky",
+    L"Ask before the window closes",
+};
+static HWND hBrk; static Canvas brkBg, brkBk;
+static RECT brkSwRect(int i) { int y0 = 86, rh = 46; return RS(286, y0 + i * rh + 4, 50, 24); }
+static void drawSwitch(Canvas *c, int i) {
+    RECT r = brkSwRect(i);
+    double x = r.left, y = r.top, w = r.right - r.left, h = r.bottom - r.top, rad = h / 2.0, k = h / 2.0 - S(3);
+    if (brk[i]) {
+        rrFill(c, x, y, w, h, rad, 0xa6ec7c, 0x2f9f26, 1, 1);
+        rrGloss(c, x, y, w, h, rad, 0.5, 0.6, 0.12);
+        rrStroke(c, x, y, w, h, rad, 0x1a6514, 0.85, 1.1, 0);
+        disc(c, x + w - h / 2.0, y + h / 2.0, k, 0xffffff, 1, 1);
+    } else {
+        rrFill(c, x, y, w, h, rad, 0xdbe6f0, 0xb4c4d4, 1, 1);
+        rrStroke(c, x, y, w, h, rad, 0x7d93a8, 0.75, 1, 0);
+        disc(c, x + h / 2.0, y + h / 2.0, k, 0xffffff, 1, 1);
+    }
+}
+static void brkPaint(void) {
+    memcpy(brkBk.px, brkBg.px, (size_t)brkBg.w * brkBg.h * 4);
+    for (int i = 0; i < BRK_N; i++) drawSwitch(&brkBk, i);
+    HDC wdc = GetDC(hBrk);
+    BitBlt(wdc, 0, 0, brkBk.w, brkBk.h, brkBk.dc, 0, 0, SRCCOPY);
+    ReleaseDC(hBrk, wdc);
+}
+static void brkBuildBg(void) {
+    renderSky(&brkBg);
+    glassPanel(&brkBg, 10, 10, 340, 328);
+    HDC dc = brkBg.dc; SetBkMode(dc, TRANSPARENT);
+    textAt(dc, hHead, L"Breakers", 0, 22, 360, 28, night ? RGB(224, 238, 255) : RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    textAt(dc, hSmall, L"Little conveniences — none of them touch your macros or typing.", 20, 56, 320, 16, HINT, DT_CENTER | DT_SINGLELINE);
+    for (int i = 0; i < BRK_N; i++) {
+        int y0 = 86, rh = 46, ry = y0 + i * rh;
+        textAt(dc, hBold, BRKNAME[i], 34, ry + 2, 240, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+        textAt(dc, hSmall, BRKDESC[i], 34, ry + 20, 248, 16, HINT, DT_LEFT | DT_SINGLELINE);
+    }
+    textAt(dc, hSmall, L"Changes save instantly.", 0, 318, 360, 16, HINT, DT_CENTER | DT_SINGLELINE);
+}
+static LRESULT CALLBACK BreakerProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    switch (m) {
+    case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(h, &ps); brkPaint(); EndPaint(h, &ps); } return 0;
+    case WM_LBUTTONDOWN: {
+        int mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
+        for (int i = 0; i < BRK_N; i++) {
+            RECT r = brkSwRect(i); r.left -= S(8); r.right += S(8); r.top -= S(10); r.bottom += S(10);
+            if (mx >= r.left && mx < r.right && my >= r.top && my < r.bottom) {
+                brk[i] = !brk[i];
+                night = brk[BRK_NIGHT];
+                saveBreakers();
+                applyTextTheme(); renderPages();
+                RedrawWindow(hFrame, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+                brkBuildBg(); brkPaint();
+                break;
+            }
+        }
+    } return 0;
+    case WM_CLOSE: saveBreakers(); DestroyWindow(h); return 0;
+    case WM_DESTROY: hBrk = NULL; return 0;
+    }
+    return DefWindowProcW(h, m, wp, lp);
+}
+static void runBreakers(void) {
+    if (hBrk) { SetForegroundWindow(hBrk); return; }
+    HINSTANCE hi = GetModuleHandleW(NULL);
+    int cw = S(360), ch = S(348);
+    if (brkBg.px) freeCanvas(&brkBg);
+    if (brkBk.px) freeCanvas(&brkBk);
+    brkBg = mkCanvas(cw, ch); brkBk = mkCanvas(cw, ch);
+    brkBuildBg();
+    static int reg = 0;
+    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = BreakerProc; c.hInstance = hi; c.lpszClassName = L"DoogBreakers";
+                c.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(2)); c.hCursor = LoadCursor(NULL, IDC_ARROW); RegisterClassW(&c); reg = 1; }
+    RECT rc = { 0, 0, cw, ch }; AdjustWindowRect(&rc, WS_CAPTION | WS_SYSMENU, FALSE);
+    int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
+    RECT pr; GetWindowRect(hFrame, &pr);
+    hBrk = CreateWindowExW(WS_EX_TOPMOST, L"DoogBreakers", L"Breakers — Frutiger Astro", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                           pr.left + S(40), pr.top + S(40), ww, wh, hFrame, NULL, hi, NULL);
+    ShowWindow(hBrk, SW_SHOW); SetForegroundWindow(hBrk);
 }
 
 /* ---------- recall shade ---------- */
@@ -3145,6 +3253,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_HKAPPLY: applyHotkeys(1); break;
         case ID_TNEW: newPrompt(1); break;
         case ID_UACTION: if (!updBusy && !rcState) { if (updAvail) startInstall(); else startCheck(); } break;
+        case ID_BREAKERS: runBreakers(); break;
         case ID_KBLOCK: toggleKb(); break;
         case ID_MAGIC: if (magicOn) magicStop(0); else magicStart(); break;
         case ID_EUPD: case ID_EINS: case ID_EDEL: case ID_EUP: case ID_EDOWN: case ID_ESCALEGO: case ID_ESTRIP:
@@ -3509,7 +3618,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     SetTimer(hFrame, 9, 10000, NULL);   /* heartbeat: online/working every 10s */
     SetTimer(hFrame, 10, 1000, NULL);   /* watch busy-state; beat the instant it flips */
 #endif
-    runSplash(hi);
+    if (brk[BRK_SPLASH]) runSplash(hi);
     ShowWindow(hFrame, show);
 
     MSG msg;

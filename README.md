@@ -48,28 +48,23 @@ The flow: make a change → `faup.py beta <ver>` builds your local `AstroBeta.ex
 
 ## What a copy sends — and never sends
 
-Frutiger Astro (not Beta) sends a small **heartbeat** so you can see how many copies are active and on what version. A heartbeat is only ever: a random install id, the app name, the version, and a `launch`/`ping` event.
+Frutiger Astro (not Beta) sends a small **heartbeat** so you can see how many copies are active, what version they run, and whether one is busy. A heartbeat is only ever: a random install id, the app name, the version, and an event — `launch`, `activate`, `ping` (every 10s), `working` (a macro/instruct is running — the *state* only, never its content), or `offline` (sent on close).
 
-It **never** sends your files, anything typed into Instruct, macros, folder names, usernames, or anything else off the PC. Telemetry is **off unless a server URL is set** (`[Servers] Url=` in the ini) and only runs **after** a copy is activated.
+It **never** sends your files, anything typed into Instruct, macros, folder names, usernames, or anything else off the PC. Heartbeats are **on by default** and start **after** a copy is activated: a copy finds the dashboard on its own by UDP LAN discovery (broadcasts `FRUTIGER-DISCOVER` to `:8788`), falling back to the baked localhost URL. Set `[Servers] Url=` in the ini to point a copy at a specific endpoint (use this for copies out on the internet). Astro Beta sends nothing at all.
 
 There is **no remote control.** Frutiger Servers only listens — it cannot send anything back to a copy, and nothing (not Frutiger Servers, not FAUP) can delete or disable a copy remotely. The only self-delete is the local three-wrong-codes one above, triggered by the person at that keyboard.
 
 ## Frutiger Servers
 
-`servers/frutiger_servers.py` is a self-hosted dashboard (Python standard library only — no installs):
+`servers/frutiger_servers.c` is a self-hosted, native Win32 dashboard (`FrutigerServers.exe` — no installs). A standalone Python version (`servers/frutiger_servers.py`) is kept for reference.
 
-```
-python servers/frutiger_servers.py        # then open http://127.0.0.1:8787/
-```
+It shows your **active-user count**, total installs, versions in the wild, and each copy with a coloured bullet — **green Online**, **amber Working** (busy with a macro/instruct), **black Offline** — plus a last-seen time and a small **activity sparkline** of its recent state. Offline copies stay listed, so your counts persist. You can give any copy a nickname for your own reference, and push a plain-text **display-only announcement** that copies show as a dismissable banner (never a command — a copy only ever *renders* it).
 
-It shows your **active-user count**, total installs, versions in the wild, and each copy as **Online / Offline** with a last-seen time (offline copies stay listed, so your counts persist). You can give any copy a nickname for your own reference. It binds to localhost by default; set `FS_HOST`, `FS_PORT`, and an optional `FS_TOKEN` (the dashboard then needs `?key=TOKEN`) to expose it.
-
-Point copies at it by adding to the `FrutigerMacro.ini` next to their exe:
+Copies on the **same network connect automatically** — the dashboard binds `0.0.0.0` and answers UDP discovery, so there's nothing to configure. For copies out on the internet, point them at a reachable endpoint by adding to the `FrutigerMacro.ini` next to their exe:
 ```ini
 [Servers]
 Url=http://YOUR-HOST:8787/beat
 ```
-For copies out on the internet, run it somewhere they can reach. For just your own machines, localhost is fine.
 
 ## Publishing
 
@@ -149,10 +144,15 @@ wine build/FrutigerAstro.exe & sleep 10 && import -window root shot.png   # wind
 | Version, update repo/channel, download/verify/swap | `/* updater */` — `APP_VERSION`, `updRepo`, `UPD_JSON`, `CheckThread`, `InstallThread` |
 | Beta vs production split | `#ifdef ASTRO_BETA` (sets name + channel, compiles out activation + telemetry) |
 | Activation gate + self-delete | `runActivation`, `codeOk`, `selfDestruct` (production only) |
-| Heartbeat | `beat`, `BeatThread` (production only; off unless `[Servers] Url=` set) |
+| Heartbeat + LAN discovery | `beat`, `BeatThread`, `discoverServer`, `resolveServerUrl` (production only; on by default) |
 | Update tab drawing | `drawUpdatePage`, `fillNotes`, `updSync` |
 | Splash | `runSplash`, `splashFrame` |
-| Opens-on-Recorder / minimize-restore | `WinMain` (`showPage(PG_MACRO)`) and `FrameProc` `WM_SIZE` |
+| Opens-on-Recorder / minimize-to-tray | `WinMain` (`showPage(PG_MACRO)`), `FrameProc` `WM_SIZE`, `trayAdd`/`trayRestore` |
+| Instruct (fixed) vs Winlan (humanizer) tabs | `buildPage`, `tog[]`/`TG_*`, page enum `PG_INSTR`/`PG_WINLAN` |
+| Humanizer auto-go + review breaks | `HState`, `hDelay`/`hPause`, `reviewBreak`, `goSkip`/`inBreak`, `ID_GO` |
+| Diff-fixer ("Fix target") | `startDiffFix`, `DiffThread`, `clipGet`/`clipSet`, LCS walk |
+| Humanized playback / Pause (F7) | `PlayThread` (`playHumanize`), `paused` in `waitUntil`, `HK_N+1` hotkey |
+| Breakers panel (night mode, tray, splash, bubbles, confirm) | `runBreakers`, `BreakerProc`, `brk[]`/`BRK_*`, `loadBreakers`/`saveBreakers` |
 
 ## Troubleshooting
 
