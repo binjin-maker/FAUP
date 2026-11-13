@@ -679,12 +679,18 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 #define WM_UPDFAIL     (WM_APP + 6)
 #define WM_UPDRESTART  (WM_APP + 7)
 #define WM_UPDPROGRESS (WM_APP + 10)
+#define WM_ANNOUNCE (WM_APP + 11)
+#define ID_RCFIX 750
+#define ID_ANNDISMISS 751
 
 enum { US_CHECKING, US_CURRENT, US_AVAILABLE, US_DOWNLOADING, US_INSTALLING, US_OFFLINE, US_ERROR, US_FAILED, US_IDLE };
 static volatile LONG updState, updPct, updBusy;
 static int updAvail, justUpdated;
 static wchar_t updRepo[128] = L"binjin-maker/FAUP";
 static wchar_t updLatest[32], updUrl[1024], updDigest[80], updDetail[200];
+static wchar_t updNotice[600], rcMsg[400], rcEta[80], rcFixed[32];
+static int rcState; static HWND hShade;
+static void applyRecall(void);
 static wchar_t *updNotes;
 
 static int updLight(void) {
@@ -814,6 +820,14 @@ static DWORD WINAPI CheckThread(LPVOID unused) {
         char *nt = jsonStr(b, "notes", NULL, NULL);
         notes = cleanNotes(nt ? nt : "");
         free(ver); free(u8); free(sha); free(nt);
+        char *noti = jsonStr(b, "notice", NULL, NULL); u8w(noti, updNotice, 600); free(noti);
+        char *rmax = jsonStr(b, "recallMax", NULL, NULL), *rmode = jsonStr(b, "recallMode", NULL, NULL),
+             *rmsg = jsonStr(b, "recallMsg", NULL, NULL), *reta = jsonStr(b, "recallEta", NULL, NULL),
+             *rfix = jsonStr(b, "recallFixed", NULL, NULL);
+        wchar_t wmax[32] = L""; u8w(rmax, wmax, 32);
+        rcState = (wmax[0] && !verNewer(APP_VERSION_W, wmax)) ? (rmode && !strcmp(rmode, "soft") ? 1 : 2) : 0;
+        u8w(rmsg, rcMsg, 400); u8w(reta, rcEta, 80); u8w(rfix, rcFixed, 32);
+        free(rmax); free(rmode); free(rmsg); free(reta); free(rfix);
     } else if (st != 404) {
         state = US_ERROR;
         detail = L"The update server is busy. Try again in a bit.";
@@ -831,12 +845,15 @@ static void fillNotes(void) {
     const wchar_t *s = updNotes && updNotes[0] ? updNotes :
         st == US_CHECKING ? L"Checking for updates…" : st == US_IDLE ? L"Press Check for updates to see what's new." :
         st == US_OFFLINE || st == US_ERROR ? L"The changelog shows up once the app can check for updates." : L"No changelog yet.";
-    size_t n = wcslen(s);
+    const wchar_t *pre1 = updNotice[0] ? updNotice : L"", *pre2 = updNotice[0] ? L"\n\n" : L"";
+    size_t n = wcslen(pre1) + wcslen(pre2) + wcslen(s);
+    wchar_t *src2 = malloc((n + 1) * sizeof(wchar_t));
+    swprintf(src2, n + 1, L"%s%s%s", pre1, pre2, s);
     wchar_t *o = malloc((n * 2 + 1) * sizeof(wchar_t)), *q = o;
-    for (const wchar_t *p = s; *p; p++) { if (*p == L'\n') *q++ = L'\r'; *q++ = *p; }
+    for (const wchar_t *p = src2; *p; p++) { if (*p == L'\n') *q++ = L'\r'; *q++ = *p; }
     *q = 0;
     SetDlgItemTextW(hMain, ID_UNOTES, o);
-    free(o);
+    free(o); free(src2);
 }
 
 static void updSync(void) {
@@ -1235,6 +1252,8 @@ static void drawUpdatePage(Canvas *c) {
     if (updAvail && st != US_CURRENT) swprintf(v, 96, L"Version %s  →  %s", APP_VERSION_W, updLatest);
     else swprintf(v, 96, L"Version %s", APP_VERSION_W);
     textAt(dc, hFont, v, 82, 110, 330, 18, HINT, DT_LEFT | DT_SINGLELINE);
+    if (rcState == 1) { textAt(dc, hBold, L"Updates are paused", 82, 132, 330, 18, RGB(180, 40, 30), DT_LEFT | DT_SINGLELINE);
+        textAt(dc, hFont, rcMsg, 82, 152, 330, 44, NAVY, DT_LEFT | DT_WORDBREAK); }
     if (st == US_DOWNLOADING || st == US_INSTALLING) {
         int pct = st == US_INSTALLING ? 100 : (int)updPct;
         double x = S(82), y = S(138), w = S(282), h = S(12);
@@ -1631,24 +1650,77 @@ static int runActivation(HINSTANCE hi) {
     return actResult;
 }
 
+static wchar_t annText[600], annIdW[16];
 static DWORD WINAPI BeatThread(LPVOID arg) {
     wchar_t *u = arg;
     HINTERNET in = InternetOpenW(L"FrutigerAstro/" APP_VERSION_W, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    char buf[2048]; DWORD len = 0, got;
     if (in) {
         HINTERNET h = InternetOpenUrlW(in, u, NULL, 0, INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_RELOAD, 0);
-        if (h) InternetCloseHandle(h);
+        if (h) { while (len < sizeof buf - 1 && InternetReadFile(h, buf + len, (DWORD)(sizeof buf - 1 - len), &got) && got) len += got; InternetCloseHandle(h); }
         InternetCloseHandle(in);
     }
-    free(u); return 0;
+    free(u); buf[len] = 0;
+    if (len) {
+        char *a = jsonStr(buf, "ann", NULL, NULL), *t = jsonStr(buf, "text", NULL, NULL);
+        if (a && a[0] && t) {
+            wchar_t aw[16], key[20]; u8w(a, aw, 16); swprintf(key, 20, L"d%s", aw);
+            if (GetPrivateProfileIntW(L"Announce", key, 0, iniPath) == 0) {
+                wcscpy(annIdW, aw); u8w(t, annText, 600);
+                PostMessageW(hMain, WM_ANNOUNCE, 0, 0);
+            }
+        }
+        free(a); free(t);
+    }
+    return 0;
 }
 
 static void beat(const wchar_t *ev) {
+    if (rcState == 2) return;
     GetPrivateProfileStringW(L"Servers", L"Url", L"", teleUrl, 300, iniPath);
     if (!teleUrl[0]) return;
     wchar_t *u = malloc(440 * sizeof(wchar_t));
     swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=%s",
              teleUrl, wcschr(teleUrl, L'?') ? L'&' : L'?', installId, APP_VERSION_W, ev);
     CloseHandle(CreateThread(NULL, 0, BeatThread, u, 0, NULL));
+}
+
+static void serverSub(const wchar_t *tail, wchar_t *out, int n) {
+    wchar_t base[320]; GetPrivateProfileStringW(L"Servers", L"Url", L"", base, 320, iniPath);
+    wchar_t *sl = wcsrchr(base, L'/'); if (sl) sl[1] = 0; swprintf(out, n, L"%s%s", base, tail);
+}
+static DWORD WINAPI DismissThread(LPVOID arg) {
+    wchar_t *u = arg;
+    HINTERNET in = InternetOpenW(L"FrutigerAstro/" APP_VERSION_W, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (in) { HINTERNET h = InternetOpenUrlW(in, u, NULL, 0, INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_RELOAD, 0); if (h) InternetCloseHandle(h); InternetCloseHandle(in); }
+    free(u); return 0;
+}
+static HWND hAnn, hAnnText;
+static LRESULT CALLBACK AnnProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    if (m == WM_COMMAND && LOWORD(wp) == ID_ANNDISMISS) {
+        wchar_t key[20]; swprintf(key, 20, L"d%s", annIdW);
+        WritePrivateProfileStringW(L"Announce", key, L"1", iniPath);
+        wchar_t *u = malloc(500 * sizeof(wchar_t)); wchar_t sub[360]; serverSub(L"dismiss", sub, 360);
+        if (sub[0]) { swprintf(u, 500, L"%s?id=%s&ann=%s", sub, installId, annIdW); CloseHandle(CreateThread(NULL, 0, DismissThread, u, 0, NULL)); } else free(u);
+        DestroyWindow(h); hAnn = NULL; return 0;
+    }
+    if (m == WM_CTLCOLORSTATIC) { SetBkColor((HDC)wp, RGB(255,255,255)); return (LRESULT)GetStockObject(WHITE_BRUSH); }
+    if (m == WM_DESTROY) { hAnn = NULL; return 0; }
+    return DefWindowProcW(h, m, wp, lp);
+}
+static void showAnnounce(void) {
+    if (hAnn) { SetWindowTextW(hAnnText, annText); SetForegroundWindow(hAnn); return; }
+    static int reg = 0;
+    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = AnnProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogAnn"; c.hCursor = LoadCursor(NULL, IDC_ARROW); c.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); RegisterClassW(&c); reg = 1; }
+    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    int W = 380, H = 200;
+    hAnn = CreateWindowExW(WS_EX_TOPMOST, L"DoogAnn", L"Frutiger Astro", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        wa.right - W - 24, wa.bottom - H - 24, W, H, NULL, NULL, GetModuleHandleW(NULL), NULL);
+    hAnnText = CreateWindowExW(0, L"STATIC", annText, WS_CHILD | WS_VISIBLE, 18, 16, W - 36, H - 90, hAnn, NULL, GetModuleHandleW(NULL), NULL);
+    SendMessageW(hAnnText, WM_SETFONT, (WPARAM)hFont, TRUE);
+    HWND d = CreateWindowExW(0, L"BUTTON", L"Dismiss", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, W / 2 - 50, H - 66, 100, 30, hAnn, (HMENU)ID_ANNDISMISS, GetModuleHandleW(NULL), NULL);
+    SendMessageW(d, WM_SETFONT, (WPARAM)hFont, TRUE);
+    ShowWindow(hAnn, SW_SHOW);
 }
 #endif
 
@@ -2620,6 +2692,51 @@ static void clickToggle(int mx, int my) {
     }
 }
 
+/* ---------- recall shade ---------- */
+static LRESULT CALLBACK ShadeProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    if (m == WM_PAINT) {
+        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT rc; GetClientRect(h, &rc);
+        for (int y = 0; y < rc.bottom; y++) { double t = (double)y / rc.bottom; int cr = (int)(8 + 20 * t), cg = (int)(22 + 40 * t), cb = (int)(44 + 70 * t);
+            HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = {0, y, rc.right, y + 1}; FillRect(dc, &ln, br); DeleteObject(br); }
+        RECT pan = { rc.right / 2 - S(170), rc.bottom / 2 - S(95), rc.right / 2 + S(170), rc.bottom / 2 + S(95) };
+        HBRUSH pb = CreateSolidBrush(RGB(234, 244, 255)); FillRect(dc, &pan, pb); DeleteObject(pb);
+        FrameRect(dc, &pan, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        SetBkMode(dc, TRANSPARENT);
+        wchar_t body[700];
+        swprintf(body, 700, L"A critical lockdown has been issued due to an issue that may endanger your personal data.\r\n\r\nFrutiger Astro will resume normal operation in %s.\r\n\r\nMessage: %s",
+                 rcEta[0] ? rcEta : L"a short while", rcMsg[0] ? rcMsg : L"(none)");
+        RECT tr = { pan.left + S(18), pan.top + S(16), pan.right - S(18), pan.bottom - S(50) };
+        SelectObject(dc, hFont); SetTextColor(dc, RGB(14, 52, 92));
+        DrawTextW(dc, body, -1, &tr, DT_LEFT | DT_WORDBREAK);
+        EndPaint(h, &ps); return 0;
+    }
+    if (m == WM_COMMAND && LOWORD(wp) == ID_RCFIX) { if (updAvail) startInstall(); else startCheck(); return 0; }
+    return DefWindowProcW(h, m, wp, lp);
+}
+static void applyRecall(void) {
+    static int shaded = 0;
+    if (rcState == 2) {
+        RECT rc; GetClientRect(hMain, &rc);
+        if (!hShade) {
+            static int reg = 0;
+            if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = ShadeProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogShade"; c.hCursor = LoadCursor(NULL, IDC_ARROW); RegisterClassW(&c); reg = 1; }
+            hShade = CreateWindowExW(0, L"DoogShade", L"", WS_CHILD, 0, 0, rc.right, rc.bottom, hMain, NULL, GetModuleHandleW(NULL), NULL);
+            HWND fx = CreateWindowExW(0, L"BUTTON", L"Install the fix", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                rc.right / 2 - S(70), rc.bottom / 2 + S(52), S(140), S(30), hShade, (HMENU)ID_RCFIX, GetModuleHandleW(NULL), NULL);
+            SendMessageW(fx, WM_SETFONT, (WPARAM)hFont, TRUE);
+        }
+        for (int i = 0; i < nctl; i++) ShowWindow(ctls[i].h, SW_HIDE);
+        SetWindowPos(hShade, HWND_TOP, 0, 0, rc.right, rc.bottom, SWP_SHOWWINDOW);
+        InvalidateRect(hShade, NULL, TRUE);
+        shaded = 1;
+    } else if (shaded) {
+        shaded = 0;
+        if (hShade) ShowWindow(hShade, SW_HIDE);
+        showPage(curPage);
+    }
+}
+
+
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
     case WM_COMMAND:
@@ -2632,7 +2749,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_CLEAR: if (!busy()) { clearEv(); curFile[0] = 0; idleStatus(); } break;
         case ID_HKAPPLY: applyHotkeys(1); break;
         case ID_TNEW: newPrompt(1); break;
-        case ID_UACTION: if (!updBusy) { if (updAvail) startInstall(); else startCheck(); } break;
+        case ID_UACTION: if (!updBusy && !rcState) { if (updAvail) startInstall(); else startCheck(); } break;
         case ID_KBLOCK: toggleKb(); break;
         case ID_MAGIC: if (magicOn) magicStop(0); else magicStart(); break;
         case ID_EUPD: case ID_EINS: case ID_EDEL: case ID_EUP: case ID_EDOWN: case ID_ESCALEGO: case ID_ESTRIP:
@@ -2741,12 +2858,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_UPDCHECKED:
         if (lp) { free(updNotes); updNotes = (wchar_t *)lp; }
         updSync();
+        applyRecall();
         if (updAvail) {
             if (tog[TG_UAUTO].on && !busy()) startInstall();
             else status(L"Update %s is ready — open the Update tab to install it.", updLatest);
         }
         return 0;
     case WM_UPDPROGRESS: InvalidateRect(h, NULL, FALSE); return 0;
+#ifndef ASTRO_BETA
+    case WM_ANNOUNCE: showAnnounce(); return 0;
+#endif
     case WM_UPDFAIL: {
         wchar_t *m = (wchar_t *)lp;
         updState = US_FAILED;

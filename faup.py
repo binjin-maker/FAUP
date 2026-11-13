@@ -168,6 +168,9 @@ def publish(ch, v, bullets, push, allow_repo_change):
             "url": f"https://raw.githubusercontent.com/{repo}/{commit}/{rel(exe)}",
             "sha256": hashlib.sha256(data).hexdigest(),
             "notes": notes_with(v, bullets, cur.get("notes", ""))}
+    for k in CARRY:                       # recall + notice persist across releases
+        if cur.get(k):
+            info[k] = cur[k]
     with open(jf, "w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(info, indent=2, ensure_ascii=False) + "\n")
     run(["git", "add", rel(jf)])
@@ -210,13 +213,90 @@ def check(ch):
     print("  ok: hash, EXE and version match")
 
 
+RECALL_KEYS = ("recallMax", "recallMode", "recallMsg", "recallEta", "recallFixed")
+CARRY = RECALL_KEYS + ("notice",)
+
+
+def _opt(a, name):
+    for x in a:
+        if x.startswith(name + "="):
+            return x[len(name) + 1:]
+    return None
+
+
+def edit_latest(mutate, commit_msg, push):
+    jf = ROOT / "update" / "latest.json"
+    if git("symbolic-ref", "--short", "HEAD") != "main":
+        die("switch to the main branch first")
+    if push and git("ls-remote", "--heads", "origin", "main"):
+        run(["git", "pull", "-q", "--ff-only", "origin", "main"])
+    info = load_json(jf)
+    if not info:
+        die("no production latest.json yet - promote a build first")
+    mutate(info)
+    with open(jf, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(info, indent=2, ensure_ascii=False) + "\n")
+    run(["git", "add", rel(jf)])
+    run(["git", "commit", "-q", "-m", commit_msg])
+    if push:
+        run(["git", "push", "-q", "origin", "HEAD:main"])
+
+
+def recall(a, push):
+    pos = [x for x in a if not x.startswith("--")]
+    if "--lift" in a:
+        def mut(info):
+            for k in RECALL_KEYS: info.pop(k, None)
+        desc, msg = "lift the recall (copies resume on their next check)", "Lift recall"
+    else:
+        if not pos:
+            die('usage: faup.py recall <maxBadVersion> "message" [--eta=...] [--fixed=<ver>] [--soft] --confirm')
+        vtuple(pos[0])
+        mode = "soft" if "--soft" in a else "full"
+        text = " ".join(pos[1:]) or "A problem was found with this version."
+        eta, fixed = _opt(a, "--eta"), _opt(a, "--fixed")
+        if fixed: vtuple(fixed)
+
+        def mut(info):
+            info["recallMax"], info["recallMode"], info["recallMsg"] = pos[0], mode, text
+            if eta: info["recallEta"] = eta
+            else: info.pop("recallEta", None)
+            if fixed: info["recallFixed"] = fixed
+            else: info.pop("recallFixed", None)
+        desc = f"issue a {mode} recall of every copy on {pos[0]} or lower"
+        msg = f"Recall <= {pos[0]} ({mode})"
+    if "--confirm" not in a:
+        print(f"This would {desc}, live to all copies on their next update check.")
+        print("Nothing changed. Re-run the exact same command with --confirm to apply it.")
+        return
+    edit_latest(mut, msg, push)
+    print(f"done: {desc}. Copies see it within ~5 min (GitHub cache).")
+
+
+def notice(a, push):
+    pos = [x for x in a if not x.startswith("--")]
+    if "--clear" in a:
+        edit_latest(lambda info: info.pop("notice", None), "Clear changelog notice", push)
+        print("cleared the changelog notice")
+    elif pos:
+        edit_latest(lambda info: info.__setitem__("notice", " ".join(pos)), "Set changelog notice", push)
+        print("set the changelog notice - shown at the top of What's new on every copy")
+    else:
+        die('usage: faup.py notice "message to everyone"   |   faup.py notice --clear')
+
+
 def main(argv):
     flags = {a for a in argv if a.startswith("--")}
     args = [a for a in argv if not a.startswith("--")]
+    cmd = args[0] if args else "help"
+    push = "--no-push" not in flags
+    if cmd == "recall":
+        return recall(argv[1:], push)
+    if cmd == "notice":
+        return notice(argv[1:], push)
     if flags - {"--no-push", "--allow-repo-change", "--beta"}:
         die("unknown option - run: python faup.py")
-    push, repo_ch = "--no-push" not in flags, "--allow-repo-change" in flags
-    cmd = args[0] if args else "help"
+    repo_ch = "--allow-repo-change" in flags
     if cmd == "build":
         ch = "beta" if "--beta" in flags else "prod"
         data = build(ch, ROOT / "build" / CHANNELS[ch]["exe"])
