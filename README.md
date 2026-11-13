@@ -22,7 +22,7 @@ While it's running, the app shows an envelope on the taskbar and in Alt+Tab, and
 
 ## How a copy updates itself
 
-The **Update** tab shows a status light, the installed version, one button, and *What's new* (the changelog of the last 10 releases).
+The **Update** tab button carries a little status light, so you can see the state from any tab. The tab itself shows a big status light, the installed version, one button, and *What's new* (the changelog of the last 10 releases).
 
 | Light | Headline | Button |
 |---|---|---|
@@ -33,7 +33,7 @@ The **Update** tab shows a status light, the installed version, one button, and 
 
 1. **Check.** Every launch, and every press of **Check for updates**, the app reads
    `https://raw.githubusercontent.com/binjin-maker/FAUP/main/update/latest.json`
-2. **Compare.** If that file's `version` is higher than the app's own, the light turns amber, the Update tab gets an orange dot, and the status bar says *Update X is ready — open the Update tab to install it*.
+2. **Compare.** If that file's `version` is higher than the app's own, the light turns amber (so does the little light on the Update tab itself), and the status bar says *Update X is ready — open the Update tab to install it*.
 3. **Download and verify.** **Install update** downloads the file at `url` and shows its progress. The file is rejected unless it starts like a Windows EXE, is at least 20 KB, and its SHA-256 matches `sha256`. If any check fails, nothing on disk changes.
 4. **Swap.** The download is saved as `FrutigerAstro.exe.new`, the running EXE is renamed to `.old`, and the new one takes its place. The app then restarts with *Updated to vX — enjoy!* in the status bar and deletes the `.old` file on its next launch.
 
