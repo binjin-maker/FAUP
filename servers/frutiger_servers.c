@@ -7,6 +7,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <commctrl.h>
 #include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -339,28 +340,169 @@ static DWORD WINAPI ServerThread(LPVOID arg) {
     for (;;) { SOCKET c = accept(srv, NULL, NULL); if (c == INVALID_SOCKET) continue; handle(c); shutdown(c, SD_BOTH); closesocket(c); }
 }
 
-/* ---------- tiny window ---------- */
-static void openDash(void) { ShellExecuteW(NULL, L"open", L"http://127.0.0.1:8787/", NULL, NULL, SW_SHOWNORMAL); }
+/* ---------- native panel ---------- */
+#define IDC_LIST 100
+#define IDC_NICK 101
+#define IDC_SAVENK 102
+#define IDC_ANN 103
+#define IDC_TARGET 104
+#define IDC_SEND 105
+#define IDC_RCVER 106
+#define IDC_RCMSG 107
+#define IDC_RCETA 108
+#define IDC_RCCOPY 109
+
+static HFONT g_ui, g_hdr;
+static HWND g_list, g_nick, g_annedit, g_target, g_rcver, g_rcmsg, g_rceta;
+
+static HWND mkctl(HWND h, HINSTANCE hi, const wchar_t *cls, const wchar_t *txt, DWORD st, DWORD ex, int x, int y, int w, int hh, int id) {
+    HWND c = CreateWindowExW(ex, cls, txt, WS_CHILD | WS_VISIBLE | st, x, y, w, hh, h, (HMENU)(INT_PTR)id, hi, NULL);
+    SendMessageW(c, WM_SETFONT, (WPARAM)g_ui, TRUE);
+    return c;
+}
+static void addcol(HWND lv, int i, const wchar_t *t, int w) {
+    LVCOLUMNW c = {0}; c.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM; c.pszText = (wchar_t *)t; c.cx = w; c.iSubItem = i;
+    SendMessageW(lv, LVM_INSERTCOLUMNW, i, (LPARAM)&c);
+}
+static void subtext(HWND lv, int row, int col, const wchar_t *t) {
+    LVITEMW s = {0}; s.iSubItem = col; s.pszText = (wchar_t *)t; SendMessageW(lv, LVM_SETITEMTEXTW, row, (LPARAM)&s);
+}
+static void seentext(long long age, wchar_t *o) {
+    if (age < 60) swprintf(o, 24, L"%llds ago", age);
+    else if (age < 3600) swprintf(o, 24, L"%lldm ago", age / 60);
+    else if (age < 86400) swprintf(o, 24, L"%lldh ago", age / 3600);
+    else swprintf(o, 24, L"%lldd ago", age / 86400);
+}
+static void refreshUI(HWND h) {
+    long long now = now_s();
+    SendMessageW(g_list, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(g_list, LVM_DELETEALLITEMS, 0, 0);
+    int keep = (int)SendMessageW(g_target, CB_GETCURSEL, 0, 0);
+    SendMessageW(g_target, CB_RESETCONTENT, 0, 0);
+    int ev = (int)SendMessageW(g_target, CB_ADDSTRING, 0, (LPARAM)L"Everyone"); SendMessageW(g_target, CB_SETITEMDATA, ev, (LPARAM)-1);
+    EnterCriticalSection(&g_lock);
+    int row = 0;
+    for (int i = 0; i < g_ni; i++) if (g_inst[i].used) {
+        int on = now - g_inst[i].last < ONLINE;
+        LVITEMW it = {0}; it.mask = LVIF_TEXT | LVIF_PARAM; it.iItem = row; it.lParam = i;
+        it.pszText = on ? L"● Online" : L"○ Offline";
+        SendMessageW(g_list, LVM_INSERTITEMW, 0, (LPARAM)&it);
+        const char *lbl = !strcmp(g_inst[i].app, "beta") ? "Astro Beta" : "Frutiger Astro";
+        wchar_t lw[40], vw[24], col[80], nk[64], se[24];
+        MultiByteToWideChar(CP_UTF8, 0, lbl, -1, lw, 40);
+        MultiByteToWideChar(CP_UTF8, 0, g_inst[i].ver, -1, vw, 24);
+        MultiByteToWideChar(CP_UTF8, 0, g_inst[i].nick, -1, nk, 64);
+        swprintf(col, 80, L"%s v%s", lw, vw);
+        subtext(g_list, row, 1, col); subtext(g_list, row, 2, nk);
+        seentext(now - g_inst[i].last, se); subtext(g_list, row, 3, se);
+        if (on) { int ix = (int)SendMessageW(g_target, CB_ADDSTRING, 0, (LPARAM)(nk[0] ? nk : col)); SendMessageW(g_target, CB_SETITEMDATA, ix, (LPARAM)i); }
+        row++;
+    }
+    LeaveCriticalSection(&g_lock);
+    SendMessageW(g_target, CB_SETCURSEL, keep < 0 ? 0 : keep, 0);
+    SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
+    RECT hr = {0, 0, 744, 66}; InvalidateRect(h, &hr, FALSE);
+}
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
+    case WM_CREATE: {
+        HINSTANCE hi = ((LPCREATESTRUCTW)lp)->hInstance;
+        g_ui = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_hdr = CreateFontW(-24, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
+                                 14, 76, 704, 210, h, (HMENU)IDC_LIST, hi, NULL);
+        SendMessageW(g_list, WM_SETFONT, (WPARAM)g_ui, TRUE);
+        SendMessageW(g_list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        addcol(g_list, 0, L"Status", 96); addcol(g_list, 1, L"App / version", 180); addcol(g_list, 2, L"Nickname", 190); addcol(g_list, 3, L"Last seen", 110);
+        mkctl(h, hi, L"STATIC", L"Nickname for selected copy:", SS_LEFT, 0, 14, 298, 200, 18, 0);
+        g_nick = mkctl(h, hi, L"EDIT", L"", 0, WS_EX_CLIENTEDGE, 14, 318, 220, 24, IDC_NICK);
+        mkctl(h, hi, L"BUTTON", L"Save name", BS_PUSHBUTTON | WS_TABSTOP, 0, 244, 317, 110, 26, IDC_SAVENK);
+        mkctl(h, hi, L"STATIC", L"Announcement (shown till dismissed on the chosen copy):", SS_LEFT, 0, 14, 356, 440, 18, 0);
+        g_annedit = mkctl(h, hi, L"EDIT", L"", ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, 14, 376, 420, 24, IDC_ANN);
+        g_target = mkctl(h, hi, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 0, 442, 376, 160, 240, IDC_TARGET);
+        mkctl(h, hi, L"BUTTON", L"Send", BS_PUSHBUTTON | WS_TABSTOP, 0, 610, 375, 108, 26, IDC_SEND);
+        mkctl(h, hi, L"STATIC", L"Emergency recall - builds the authenticated faup.py command to run in your FAUP clone:", SS_LEFT, 0, 14, 414, 700, 18, 0);
+        mkctl(h, hi, L"STATIC", L"Version:", SS_LEFT, 0, 14, 440, 54, 18, 0);
+        g_rcver = mkctl(h, hi, L"EDIT", L"", 0, WS_EX_CLIENTEDGE, 70, 438, 80, 24, IDC_RCVER);
+        mkctl(h, hi, L"STATIC", L"Message:", SS_LEFT, 0, 160, 440, 60, 18, 0);
+        g_rcmsg = mkctl(h, hi, L"EDIT", L"", ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, 222, 438, 250, 24, IDC_RCMSG);
+        mkctl(h, hi, L"STATIC", L"ETA:", SS_LEFT, 0, 482, 440, 30, 18, 0);
+        g_rceta = mkctl(h, hi, L"EDIT", L"", 0, WS_EX_CLIENTEDGE, 514, 438, 90, 24, IDC_RCETA);
+        mkctl(h, hi, L"BUTTON", L"Copy command", BS_PUSHBUTTON | WS_TABSTOP, 0, 14, 470, 150, 26, IDC_RCCOPY);
+        SetTimer(h, 1, 2000, NULL);
+        refreshUI(h);
+    } return 0;
+    case WM_TIMER: refreshUI(h); return 0;
+    case WM_NOTIFY:
+        if (((NMHDR *)lp)->idFrom == IDC_LIST && ((NMHDR *)lp)->code == LVN_ITEMCHANGED) {
+            int sel = (int)SendMessageW(g_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+            if (sel >= 0) {
+                LVITEMW it = {0}; it.mask = LVIF_PARAM; it.iItem = sel; SendMessageW(g_list, LVM_GETITEMW, 0, (LPARAM)&it);
+                int idx = (int)it.lParam; wchar_t nk[64] = L"";
+                EnterCriticalSection(&g_lock); if (idx >= 0 && idx < g_ni && g_inst[idx].used) MultiByteToWideChar(CP_UTF8, 0, g_inst[idx].nick, -1, nk, 64);
+                LeaveCriticalSection(&g_lock);
+                SetWindowTextW(g_nick, nk);
+            }
+        }
+        break;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_SAVENK) {
+            int sel = (int)SendMessageW(g_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+            if (sel >= 0) {
+                LVITEMW it = {0}; it.mask = LVIF_PARAM; it.iItem = sel; SendMessageW(g_list, LVM_GETITEMW, 0, (LPARAM)&it);
+                int idx = (int)it.lParam; wchar_t nk[64]; GetWindowTextW(g_nick, nk, 64);
+                char na[96]; WideCharToMultiByte(CP_UTF8, 0, nk, -1, na, 96, 0, 0);
+                EnterCriticalSection(&g_lock); if (idx >= 0 && idx < g_ni && g_inst[idx].used) { strncpy(g_inst[idx].nick, na, 63); g_inst[idx].nick[63] = 0; save_locked(); }
+                LeaveCriticalSection(&g_lock); refreshUI(h);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_SEND) {
+            wchar_t tw[300]; GetWindowTextW(g_annedit, tw, 300);
+            if (tw[0]) {
+                char ta[600]; WideCharToMultiByte(CP_UTF8, 0, tw, -1, ta, 600, 0, 0); strip_nl(ta);
+                int ci = (int)SendMessageW(g_target, CB_GETCURSEL, 0, 0), idx = (int)SendMessageW(g_target, CB_GETITEMDATA, ci, 0);
+                char target[40] = "";
+                EnterCriticalSection(&g_lock);
+                if (idx >= 0 && idx < g_ni) strncpy(target, g_inst[idx].id, 39);
+                if (g_na < MAXA) { Ann *a = &g_ann[g_na++]; memset(a, 0, sizeof *a); a->used = 1; a->id = ++g_seq; strncpy(a->target, target, 39); strncpy(a->text, ta, 299); a->created = now_s(); save_locked(); }
+                LeaveCriticalSection(&g_lock);
+                SetWindowTextW(g_annedit, L"");
+                MessageBoxW(h, L"Sent. Copies that report to this server show it until the user dismisses it.", L"Frutiger Servers", MB_OK | MB_ICONINFORMATION);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_RCCOPY) {
+            wchar_t v[32], msg[300], eta[64]; GetWindowTextW(g_rcver, v, 32); GetWindowTextW(g_rcmsg, msg, 300); GetWindowTextW(g_rceta, eta, 64);
+            if (!v[0]) { MessageBoxW(h, L"Enter the version to recall first (copies on that version or lower).", L"Frutiger Servers", MB_ICONWARNING); return 0; }
+            for (wchar_t *p = msg; *p; p++) if (*p == L'"') *p = L'\'';
+            wchar_t cmd[700];
+            if (eta[0]) swprintf(cmd, 700, L"python faup.py recall %s \"%s\" --eta=\"%s\" --confirm", v, msg, eta);
+            else swprintf(cmd, 700, L"python faup.py recall %s \"%s\" --confirm", v, msg);
+            if (OpenClipboard(h)) { EmptyClipboard(); size_t n = (wcslen(cmd) + 1) * sizeof(wchar_t); HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, n); memcpy(GlobalLock(g), cmd, n); GlobalUnlock(g); SetClipboardData(CF_UNICODETEXT, g); CloseClipboard(); }
+            MessageBoxW(h, cmd, L"Copied - run this in your FAUP clone (lift later with: faup.py recall --lift --confirm)", MB_OK);
+            return 0;
+        }
+        break;
+    case WM_CTLCOLORSTATIC: SetBkColor((HDC)wp, RGB(238, 246, 251)); SetBkMode((HDC)wp, TRANSPARENT); return (LRESULT)GetStockObject(NULL_BRUSH);
+    case WM_ERASEBKGND: { RECT rc; GetClientRect(h, &rc); rc.top = 66; HBRUSH b = CreateSolidBrush(RGB(238, 246, 251)); FillRect((HDC)wp, &rc, b); DeleteObject(b); } return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT rc; GetClientRect(h, &rc);
-        for (int y = 0; y < rc.bottom; y++) {
-            double t = (double)y / rc.bottom;
-            int cr = (int)(22 + (238 - 22) * t), cg = (int)(136 + (251 - 136) * t), cb = (int)(214 + (255 - 214) * t);
-            HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = { 0, y, rc.right, y + 1 }; FillRect(dc, &ln, br); DeleteObject(br);
-        }
+        for (int y = 0; y < 66; y++) { double t = (double)y / 66; int cr = (int)(22 + 150 * t), cg = (int)(136 + 90 * t), cb = (int)(214 + 40 * t);
+            HBRUSH br = CreateSolidBrush(RGB(cr, cg, cb)); RECT ln = {0, y, rc.right, y + 1}; FillRect(dc, &ln, br); DeleteObject(br); }
         SetBkMode(dc, TRANSPARENT);
-        HFONT big = CreateFontW(-26, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-        HFONT sml = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-        SelectObject(dc, big); SetTextColor(dc, RGB(255, 255, 255));
-        RECT t1 = { 0, 26, rc.right, 70 }; DrawTextW(dc, L"Frutiger Servers", -1, &t1, DT_CENTER | DT_SINGLELINE);
-        SelectObject(dc, sml); SetTextColor(dc, RGB(20, 70, 110));
-        RECT t2 = { 0, 70, rc.right, 92 }; DrawTextW(dc, L"running at http://127.0.0.1:8787/", -1, &t2, DT_CENTER | DT_SINGLELINE);
-        DeleteObject(big); DeleteObject(sml); EndPaint(h, &ps);
+        SelectObject(dc, g_hdr); SetTextColor(dc, RGB(255, 255, 255));
+        RECT t1 = {18, 10, rc.right, 48}; DrawTextW(dc, L"Frutiger Servers", -1, &t1, DT_LEFT | DT_SINGLELINE);
+        long long now = now_s(); int on = 0, tot = 0;
+        EnterCriticalSection(&g_lock);
+        for (int i = 0; i < g_ni; i++) if (g_inst[i].used) { tot++; if (now - g_inst[i].last < ONLINE) on++; }
+        LeaveCriticalSection(&g_lock);
+        wchar_t st[64]; swprintf(st, 64, L"Active %d  ·  Installs %d", on, tot);
+        SelectObject(dc, g_ui); SetTextColor(dc, RGB(230, 245, 255));
+        RECT t2 = {0, 24, rc.right - 18, 44}; DrawTextW(dc, st, -1, &t2, DT_RIGHT | DT_SINGLELINE);
+        EndPaint(h, &ps);
     } return 0;
-    case WM_COMMAND: if (LOWORD(wp) == 1) openDash(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, m, wp, lp);
@@ -372,6 +514,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     char *sl = strrchr(g_dat, '\\'); if (sl) sl[1] = 0; strcat(g_dat, "frutiger_servers.dat");
     InitializeCriticalSection(&g_lock);
     load();
+    INITCOMMONCONTROLSEX ic = { sizeof ic, ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES }; InitCommonControlsEx(&ic);
 
     WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
     SOCKET srv = socket(AF_INET, SOCK_STREAM, 0);
@@ -385,14 +528,13 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     CreateThread(NULL, 0, ServerThread, (LPVOID)(INT_PTR)srv, 0, NULL);
 
     WNDCLASSW wc = {0}; wc.lpfnWndProc = WndProc; wc.hInstance = hi; wc.lpszClassName = L"FrutigerServers";
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(1)); RegisterClassW(&wc);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(1)); wc.hbrBackground = NULL;
+    RegisterClassW(&wc);
+    RECT wr = {0, 0, 732, 512}; AdjustWindowRect(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
     g_win = CreateWindowExW(0, L"FrutigerServers", L"Frutiger Servers",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, 440, 190, NULL, NULL, hi, NULL);
-    CreateWindowExW(0, L"BUTTON", L"Open dashboard", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-        140, 110, 160, 34, g_win, (HMENU)1, hi, NULL);
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, hi, NULL);
     ShowWindow(g_win, show ? show : SW_SHOWNORMAL);
-    openDash();
 
-    MSG msg; while (GetMessageW(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    MSG msg; while (GetMessageW(&msg, NULL, 0, 0) > 0) { if (!IsDialogMessageW(g_win, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }
     return 0;
 }

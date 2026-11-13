@@ -4,12 +4,12 @@ A tiny self-hosted dashboard for the Frutiger series. It **only listens**: copie
 
 ## Run
 
-Just run `FrutigerServers.exe` (Windows, no install). It opens the dashboard at `http://127.0.0.1:8787/` and keeps running in a small window. Data is stored next to the exe in `frutiger_servers.dat`.
+Just run `FrutigerServers.exe` (Windows, no install). The whole panel is **in the window** — copy list, announcements, and the emergency recall builder — no browser needed. Data is stored next to the exe in `frutiger_servers.dat`. (A read-only web view is still served at `http://127.0.0.1:8787/` if you ever want it.)
 
 Build it yourself from `frutiger_servers.c`:
 ```
 python -m ziglang cc -target x86_64-windows-gnu -O2 -s -o FrutigerServers.exe frutiger_servers.c servers.rc \
-  -Wl,--subsystem,windows -lws2_32 -luser32 -lgdi32 -lshell32
+  -Wl,--subsystem,windows -lws2_32 -luser32 -lgdi32 -lshell32 -lcomctl32
 ```
 
 ## What it shows
