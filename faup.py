@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """FAUP - Frutiger Astro Pusher
 
-  python faup.py build                                 build build/FrutigerAstro.exe from src/ (publishes nothing)
-  python faup.py publish 1.14.7 "note" ["note" ...]   release a new version to every copy's Update tab
-  python faup.py publish 1.14.7 "note" --no-push      same, but leave both commits for you to git push
-  python faup.py check                                 verify update/latest.json against the EXE it points at
+  python faup.py build                               build build/FrutigerAstro.exe from src/ (publishes nothing)
+  python faup.py publish 1.14.8 ["note" ...]        release a new version to every copy's Update tab
+  python faup.py check                               verify update/latest.json against the EXE it points at
+
+publish options:
+  --no-push              make both commits but leave them for you to git push
+  --allow-repo-change    publish a build whose updRepo isn't binjin-maker/FAUP (moves every copy to that repo)
 """
 import hashlib
 import json
@@ -14,6 +17,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+CHANNEL = "binjin-maker/FAUP"
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 C_FILE = SRC / "FrutigerMacro.c"
@@ -43,7 +47,6 @@ ZIP_README = "\r\n".join([
     "5. That's the only manual install. New versions show up on the Update tab",
     "   (orange dot): press Install update and it restarts into the new one.",
     "",
-    "Updates come from https://github.com/binjin-maker/FAUP",
     "Made by DOOG unincorporated.",
     "",
 ])
@@ -75,7 +78,7 @@ def rel(p):
 def vtuple(v):
     m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", v or "")
     if not m:
-        die(f"versions look like 1.14.7, not {v!r}")
+        die(f"versions look like 1.14.8, not {v!r}")
     return tuple(int(x) for x in m.groups())
 
 
@@ -142,18 +145,20 @@ def notes_with(v, bullets, old):
     return "\n\n".join(blocks[:KEEP_NOTES])
 
 
-def publish(v, bullets, push):
+def publish(v, bullets, push, allow_repo_change):
     new = vtuple(v)
-    if not bullets:
-        die('add at least one release note: python faup.py publish 1.14.7 "what changed"')
     if git("symbolic-ref", "--short", "HEAD") != "main":
         die("switch to the main branch first - copies only read main")
     repo, app_repo = origin_repo(), src_repo()
     if repo.lower() == app_repo.lower():
         repo = app_repo
+    elif repo.lower() == CHANNEL.lower() and not allow_repo_change:
+        die(f'src/FrutigerMacro.c has updRepo = L"{app_repo}", so every copy that installs this build would\n'
+            f'      stop getting updates from FAUP. Set it back to L"{CHANNEL}" (or pass --allow-repo-change\n'
+            f"      if you're moving the channel on purpose).")
     else:
-        print(f"warning: publishing to {repo}, but the app checks {app_repo} by default - only copies with\n"
-              f"         Repo={repo} under [Update] in FrutigerMacro.ini will see this release")
+        print(f"warning: publishing to {repo}, but this build checks {app_repo} for updates - copies that\n"
+              f"         install it follow {app_repo} afterwards (unless their FrutigerMacro.ini sets Repo=)")
     if push and git("ls-remote", "--heads", "origin", "main"):
         run(["git", "pull", "-q", "--ff-only", "origin", "main"])
     cur = load_json()
@@ -191,8 +196,18 @@ def publish(v, bullets, push):
 
     print(f"published {v}  ({len(data):,} bytes, sha256 {info['sha256'][:16]}...)")
     print(f"  exe   {info['url']}")
-    print("  copies see it on their next launch or Check now" if push else
+    print("  copies see it on their next launch or Check for updates" if push else
           "  not pushed yet - run: git push   (both commits, or copies will fail to download it)")
+
+
+def show(ref, path):
+    r = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=ROOT, capture_output=True)
+    if r.returncode:
+        subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin", ref], cwd=ROOT, capture_output=True)
+        r = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=ROOT, capture_output=True)
+    if r.returncode:
+        die(f"{path} isn't in commit {ref[:12]} - it was never pushed, or this clone can't fetch it")
+    return r.stdout
 
 
 def check():
@@ -207,13 +222,12 @@ def check():
     if not m:
         die("url has to be a direct https://raw.githubusercontent.com/... link")
     slug, ref, path = m.groups()
-    r = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=ROOT, capture_output=True)
-    if r.returncode:
-        die(f"{path} isn't in {ref[:12]} in this clone - git pull, or the commit was never pushed")
-    data = r.stdout
+    data = show(ref, path)
     problems = []
     if slug.lower() != origin_repo().lower():
         problems.append(f"url points at {slug}, not this repo ({origin_repo()})")
+    if not re.fullmatch(r"[0-9a-f]{40}", ref):
+        problems.append(f"url uses '{ref}' instead of a commit hash - GitHub's cache can serve a stale EXE")
     if data[:2] != b"MZ":
         problems.append("the file at url isn't an EXE - copies will reject it")
     if hashlib.sha256(data).hexdigest() != info["sha256"].strip().lower():
@@ -228,14 +242,17 @@ def check():
 
 
 def main(argv):
-    push = "--no-push" not in argv
-    args = [a for a in argv if a != "--no-push"]
+    flags = {a for a in argv if a.startswith("--")}
+    args = [a for a in argv if not a.startswith("--")]
+    unknown = flags - {"--no-push", "--allow-repo-change"}
+    if unknown:
+        die(f"unknown option {sorted(unknown)[0]} - run: python faup.py help")
     cmd = args[0] if args else "help"
     if cmd == "build":
         data = build()
         print(f"built {rel(BUILD)}  v{src_version()}  {len(data):,} bytes  sha256 {hashlib.sha256(data).hexdigest()}")
     elif cmd == "publish" and len(args) >= 2:
-        publish(args[1], args[2:], push)
+        publish(args[1], args[2:], "--no-push" not in flags, "--allow-repo-change" in flags)
     elif cmd == "check":
         check()
     else:
