@@ -149,7 +149,9 @@ def publish(v, bullets, push):
     if git("symbolic-ref", "--short", "HEAD") != "main":
         die("switch to the main branch first - copies only read main")
     repo, app_repo = origin_repo(), src_repo()
-    if repo.lower() != app_repo.lower():
+    if repo.lower() == app_repo.lower():
+        repo = app_repo
+    else:
         print(f"warning: publishing to {repo}, but the app checks {app_repo} by default - only copies with\n"
               f"         Repo={repo} under [Update] in FrutigerMacro.ini will see this release")
     if push and git("ls-remote", "--heads", "origin", "main"):
