@@ -56,6 +56,7 @@ static WORD hkVal[HK_N] = { VK_F9, VK_F10, VK_F11, VK_F8, (WORD)('V' | ((HOTKEYF
 static HWND hMain, hFrame, hBtn[HK_N], hHk[HK_N];
 static HHOOK hkKb, hkMs;
 static Ev *ev; static int nev, cap;
+static int night;   /* night (dark) theme */
 static volatile LONG recording, playing, typing, stopFlag;
 static volatile LONG goSkip, inBreak, paused;
 static double pausedTotal, pauseT0;
@@ -701,8 +702,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.16"
-#define APP_VERSION_W L"1.14.16"
+#define APP_VERSION   "1.14.17"
+#define APP_VERSION_W L"1.14.17"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1010,23 +1011,23 @@ static HWND hoverBtn;
 static wchar_t statusText[512] = L"";
 static wchar_t curFile[MAX_PATH] = L"";
 
-#define NAVY RGB(14, 52, 92)
-#define HINT RGB(70, 110, 150)
+#define NAVY (night ? RGB(214, 231, 249) : RGB(14, 52, 92))
+#define HINT (night ? RGB(150, 182, 214) : RGB(70, 110, 150))
 
 static RECT RS(int x, int y, int w, int h) { RECT r = { S(x), S(y), S(x + w), S(y + h) }; return r; }
 
 static void glassPanel(Canvas *c, int lx, int ly, int lw, int lh) {
     double x = S(lx), y = S(ly), w = S(lw), h = S(lh), r = S(12);
-    rrShadow(c, x, y + S(3), w, h, r, S(10), 0.22);
-    rrFill(c, x, y, w, h, r, 0xffffff, 0xe6f7ff, 0.66, 0.42);
-    rrGloss(c, x, y, w, h, r, 0.32, 0.55, 0.08);
-    rrStroke(c, x, y, w, h, r, 0x1f5f94, 0.38, 1, 1);
-    rrStroke(c, x, y, w, h, r, 0xffffff, 0.95, 1.3, 0);
+    rrShadow(c, x, y + S(3), w, h, r, S(10), night ? 0.35 : 0.22);
+    rrFill(c, x, y, w, h, r, night ? 0x3a4f73 : 0xffffff, night ? 0x1b2a46 : 0xe6f7ff, night ? 0.80 : 0.66, night ? 0.62 : 0.42);
+    rrGloss(c, x, y, w, h, r, 0.32, night ? 0.30 : 0.55, 0.08);
+    rrStroke(c, x, y, w, h, r, night ? 0x0c1526 : 0x1f5f94, night ? 0.6 : 0.38, 1, 1);
+    rrStroke(c, x, y, w, h, r, night ? 0x6782a8 : 0xffffff, night ? 0.55 : 0.95, 1.3, 0);
 }
 
 static void inset(Canvas *c, int lx, int ly, int lw, int lh) {
-    rrFill(c, S(lx), S(ly), S(lw), S(lh), S(8), 0xffffff, 0xf2faff, 0.7, 0.5);
-    rrStroke(c, S(lx), S(ly), S(lw), S(lh), S(8), 0x2b7fc4, 0.35, 1, 0);
+    rrFill(c, S(lx), S(ly), S(lw), S(lh), S(8), night ? 0x243850 : 0xffffff, night ? 0x18273e : 0xf2faff, night ? 0.85 : 0.7, night ? 0.7 : 0.5);
+    rrStroke(c, S(lx), S(ly), S(lw), S(lh), S(8), night ? 0x40608a : 0x2b7fc4, 0.35, 1, 0);
 }
 
 static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, int lh, COLORREF col, UINT fmt) {
@@ -1036,7 +1037,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_NIGHT, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -1049,6 +1050,7 @@ static Tog tog[TG_N] = {
     { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
     { L"Auto-go",               PG_WINLAN,  20, 283,  84, 0, 0 },
     { L"Humanize play",         PG_MACRO,  272, 127, 148, 0, 0 },
+    { L"Night mode",            PG_UPDATE, 322, 322, 100, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1072,18 +1074,19 @@ static void renderSky(Canvas *c) {
     double sx = W * 0.88, sy = -H * 0.04;
     for (int y = 0; y < H; y++) {
         double t = (double)y / H;
-        int col = t < 0.45 ? lerpCol(0x1688d6, 0x8ad4f7, t / 0.45) : lerpCol(0x8ad4f7, 0xeefbff, (t - 0.45) / 0.55);
+        int col = night ? (t < 0.45 ? lerpCol(0x0a1430, 0x22325a, t / 0.45) : lerpCol(0x22325a, 0x3a4a72, (t - 0.45) / 0.55))
+                        : (t < 0.45 ? lerpCol(0x1688d6, 0x8ad4f7, t / 0.45) : lerpCol(0x8ad4f7, 0xeefbff, (t - 0.45) / 0.55));
         for (int x = 0; x < W; x++) {
             double dx = x - sx, dy = y - sy, d = hypot(dx, dy) / (W * 0.9);
             double glow = clamp01(1 - d); glow *= glow;
             double ray = sin(atan2(dy, dx) * 16) * 0.5 + 0.5;
             ray = ray > 0.72 ? (ray - 0.72) / 0.28 : 0;
-            c->px[y * W + x] = (DWORD)lerpCol(col, 0xffffff, clamp01(glow * 0.6 + ray * 0.10 * clamp01(1.2 - d)));
+            c->px[y * W + x] = (DWORD)lerpCol(col, night ? 0xb0c2e8 : 0xffffff, clamp01((glow * 0.6 + ray * 0.10 * clamp01(1.2 - d)) * (night ? 0.45 : 1)));
         }
     }
     for (int pass = 0; pass < 2; pass++) {
         double base = pass ? H * 0.90 : H * 0.83, amp = pass ? S(14) : S(22);
-        int top = pass ? 0x7fdc46 : 0xa8e86a, bot = pass ? 0x2f8f23 : 0x4fae34;
+        int top = night ? (pass ? 0x1d4a16 : 0x285c20) : (pass ? 0x7fdc46 : 0xa8e86a), bot = night ? (pass ? 0x0c280c : 0x163a12) : (pass ? 0x2f8f23 : 0x4fae34);
         for (int x = 0; x < W; x++) {
             double cy = base + amp * sin(x / (double)W * (pass ? 4.2 : 2.6) + (pass ? 1.9 : 0.4));
             for (int y = (int)cy - 1; y < H; y++) {
@@ -1091,7 +1094,7 @@ static void renderSky(Canvas *c) {
                 double cov = clamp01(y + .5 - cy + .5);
                 blend(c, x, y, lerpCol(top, bot, clamp01((y - cy) / (H - cy + 1))), cov);
                 double crest = (y - cy) / S(4);
-                if (crest >= 0 && crest < 1) blend(c, x, y, 0xffffff, 0.45 * (1 - crest));
+                if (crest >= 0 && crest < 1) blend(c, x, y, night ? 0x9fb0d0 : 0xffffff, (night ? 0.2 : 0.45) * (1 - crest));
             }
         }
     }
@@ -1193,7 +1196,7 @@ static void drawTabs(Canvas *c) {
             gel(c, x, y, w, h, rad, &PAL_BLUE, 0, 0);
             gelText(c->dc, TABNAME[i], tr, &PAL_BLUE, 0);
         } else {
-            rrFill(c, x, y, w, h, rad, 0xffffff, 0xd6eefc, i == tabHover ? 0.85 : 0.5, i == tabHover ? 0.7 : 0.35);
+            rrFill(c, x, y, w, h, rad, night ? 0x3c5277 : 0xffffff, night ? 0x1f2f4c : 0xd6eefc, i == tabHover ? 0.85 : 0.5, i == tabHover ? 0.7 : 0.35);
             if (i == tabHover) rrGlow(c, x, y, w, h, rad, x + w / 2, y + h * 1.1, w * 0.5, 0x86e8ff, 0.6);
             rrGloss(c, x, y, w, h, rad, 0.5, 0.5, 0.1);
             rrStroke(c, x, y, w, h, rad, 0x2b7fc4, 0.45, 1, 0);
@@ -1455,9 +1458,14 @@ static void resetTextFormat(HWND re) {
     CHARRANGE keep; SendMessageW(re, EM_EXGETSEL, 0, (LPARAM)&keep);
     CHARFORMAT2W cf; memset(&cf, 0, sizeof cf); cf.cbSize = sizeof cf;
     cf.dwMask = CFM_BACKCOLOR | CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT;
-    cf.dwEffects = CFE_AUTOBACKCOLOR; cf.crTextColor = RGB(14, 52, 92);
+    cf.dwEffects = CFE_AUTOBACKCOLOR; cf.crTextColor = NAVY;
     SendMessageW(re, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
     SendMessageW(re, EM_EXSETSEL, 0, (LPARAM)&keep);
+}
+
+static void applyTextTheme(void) {
+    HWND te = GetDlgItem(hMain, ID_TEXT);
+    if (te) { SendMessageW(te, EM_SETBKGNDCOLOR, 0, night ? RGB(26, 40, 60) : RGB(255, 255, 255)); resetTextFormat(te); }
 }
 
 static int hlPrev = -1;
@@ -2753,7 +2761,7 @@ static void buildUI(void) {
     HWND te = mk(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
                  20, 70, 400, 110, ID_TEXT);
     SendMessageW(te, EM_EXLIMITTEXT, 0, 0x7FFFFFFF);
-    SendMessageW(te, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
+    SendMessageW(te, EM_SETBKGNDCOLOR, 0, night ? RGB(26, 40, 60) : RGB(255, 255, 255));
     SendMessageW(te, EM_SETTARGETDEVICE, 0, 0);
     resetTextFormat(te);
     SetWindowSubclass(te, RichSub, 2, 0);
@@ -2888,7 +2896,7 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
     { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay", L"Night" };
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -2896,6 +2904,7 @@ static void loadSettings(void) {
         if (GetPrivateProfileStringW(L"Settings", SAVED[i].key, L"\x01", b, 64, iniPath) && b[0] != 1)
             SetDlgItemTextW(hMain, SAVED[i].id, b);
     for (int i = 0; i < TG_N; i++) tog[i].on = GetPrivateProfileIntW(L"Settings", TOGKEY[i], tog[i].on, iniPath) != 0;
+    night = tog[TG_NIGHT].on;
 }
 
 static void saveSettings(void) {
@@ -2933,6 +2942,7 @@ static void clickToggle(int mx, int my) {
         if (mx < r.left || mx >= r.right || my < r.top || my >= r.bottom) continue;
         if (tog[i].radio) { for (int k = 0; k < TG_N; k++) if (tog[k].radio) tog[k].on = 0; tog[i].on = 1; }
         else tog[i].on = !tog[i].on;
+        if (i == TG_NIGHT) { night = tog[TG_NIGHT].on; applyTextTheme(); renderPages(); InvalidateRect(hFrame, NULL, FALSE); }
         InvalidateRect(hMain, NULL, FALSE);
         return;
     }
@@ -3063,9 +3073,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM: drawButton((DRAWITEMSTRUCT *)lp); return TRUE;
     case WM_NOTIFY: if (((NMHDR *)lp)->idFrom == ID_LIST) return listNotify((NMHDR *)lp); break;
     case WM_CTLCOLOREDIT:
-    case WM_CTLCOLORSTATIC:
-        SetTextColor((HDC)wp, NAVY); SetBkColor((HDC)wp, RGB(255, 255, 255));
+    case WM_CTLCOLORSTATIC: {
+        static HBRUSH darkBr;
+        SetTextColor((HDC)wp, NAVY);
+        SetBkColor((HDC)wp, night ? RGB(26, 40, 60) : RGB(255, 255, 255));
+        if (night) { if (!darkBr) darkBr = CreateSolidBrush(RGB(26, 40, 60)); return (LRESULT)darkBr; }
         return (LRESULT)GetStockObject(WHITE_BRUSH);
+    }
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
@@ -3343,6 +3357,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
     presetsSeed();
     presetsReload(L"Me");
     loadSettings();
+    applyTextTheme(); renderPages();   /* re-theme once night is known */
     applyHotkeys(0);
     newPrompt(0);
     showPage(PG_MACRO);
