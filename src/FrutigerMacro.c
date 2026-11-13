@@ -1627,6 +1627,7 @@ static int runActivation(HINSTANCE hi) {
            30, 192, 320, 44, HINT, DT_CENTER | DT_WORDBREAK);
     WNDCLASSW ac = {0};
     ac.lpfnWndProc = ActProc; ac.hInstance = hi; ac.lpszClassName = L"DoogActivate";
+    ac.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(2));
     ac.hCursor = LoadCursor(NULL, IDC_ARROW); ac.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&ac);
     RECT rc = { 0, 0, cw, ch }; AdjustWindowRect(&rc, WS_CAPTION | WS_SYSMENU, FALSE);
@@ -1711,7 +1712,7 @@ static LRESULT CALLBACK AnnProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
 static void showAnnounce(void) {
     if (hAnn) { SetWindowTextW(hAnnText, annText); SetForegroundWindow(hAnn); return; }
     static int reg = 0;
-    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = AnnProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogAnn"; c.hCursor = LoadCursor(NULL, IDC_ARROW); c.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); RegisterClassW(&c); reg = 1; }
+    if (!reg) { WNDCLASSW c = {0}; c.lpfnWndProc = AnnProc; c.hInstance = GetModuleHandleW(NULL); c.lpszClassName = L"DoogAnn"; c.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(2)); c.hCursor = LoadCursor(NULL, IDC_ARROW); c.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); RegisterClassW(&c); reg = 1; }
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int W = 380, H = 200;
     hAnn = CreateWindowExW(WS_EX_TOPMOST, L"DoogAnn", L"Frutiger Astro", WS_POPUP | WS_CAPTION | WS_SYSMENU,
