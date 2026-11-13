@@ -24,6 +24,7 @@
 #define WM_STATUS (WM_APP + 1)
 #define WM_DONE   (WM_APP + 2)
 #define WM_GOBREAK (WM_APP + 12)
+#define WM_TRAY    (WM_APP + 13)
 #define WM_HL     (WM_APP + 3)
 #define HL(i) PostMessageW(hMain, WM_HL, (WPARAM)(INT_PTR)(i), 0)
 #define HLJ(j, i) do { if (!(j)->clip) HL(i); } while (0)
@@ -56,9 +57,10 @@ static HWND hMain, hFrame, hBtn[HK_N], hHk[HK_N];
 static HHOOK hkKb, hkMs;
 static Ev *ev; static int nev, cap;
 static volatile LONG recording, playing, typing, stopFlag;
-static volatile LONG goSkip, inBreak;
+static volatile LONG goSkip, inBreak, paused;
+static double pausedTotal, pauseT0;
 static DWORD lastT, lastMoveT;
-static int recMoves = 1, playReps = 1;
+static int recMoves = 1, playReps = 1, playHumanize = 0;
 static double playSpeed = 1.0;
 static wchar_t iniPath[MAX_PATH];
 static double qpf;
@@ -73,7 +75,9 @@ static double nowMs(void) { LARGE_INTEGER c; QueryPerformanceCounter(&c); return
 static int waitUntil(double target) {
     for (;;) {
         if (stopFlag) return 0;
-        double r = target - nowMs();
+        if (paused) { if (pauseT0 == 0) pauseT0 = nowMs(); Sleep(30); continue; }
+        if (pauseT0 != 0) { pausedTotal += nowMs() - pauseT0; pauseT0 = 0; }   /* don't rush to catch up after a pause */
+        double r = (target + pausedTotal) - nowMs();
         if (r <= 0) return 1;
         Sleep(r > 16 ? 10 : (r > 2 ? 1 : 0));
     }
@@ -231,15 +235,23 @@ static void waitModsUp(void) {
     while (modsDown() && !stopFlag && nowMs() - t0 < 3000) Sleep(10);
 }
 
+static double rnd(void); static double gauss(void); static double rrange(double, double);
 static DWORD WINAPI PlayThread(LPVOID unused) {
     (void)unused;
+    int playHuman = playHumanize;
     waitModsUp();
     for (int r = 0; (playReps == 0 || r < playReps) && !stopFlag; r++) {
-        if (playReps == 0) status(L"Playing — loop %d (infinite)", r + 1);
-        else status(L"Playing — loop %d of %d", r + 1, playReps);
+        if (playReps == 0) status(L"Playing — loop %d (infinite)%s", r + 1, playHuman ? L" · humanized" : L"");
+        else status(L"Playing — loop %d of %d%s", r + 1, playReps, playHuman ? L" · humanized" : L"");
         double t0 = nowMs(), tgt = 0;
         for (int i = 0; i < nev; i++) {
-            tgt += ev[i].delay / playSpeed;
+            double d = ev[i].delay / playSpeed;
+            if (playHuman && ev[i].delay > 0) {
+                double f = 1.0 + 0.22 * gauss(); if (f < 0.6) f = 0.6; if (f > 1.6) f = 1.6;
+                d *= f;
+                if (rnd() < 0.04) d += rrange(120, 500);   /* occasional human hesitation */
+            }
+            tgt += d;
             if (!waitUntil(t0 + tgt)) break;
             doEv(&ev[i]);
         }
@@ -524,9 +536,10 @@ static UINT hkMods(WORD v) {
     return MOD_NOREPEAT | ((m & HOTKEYF_CONTROL) ? MOD_CONTROL : 0) |
            ((m & HOTKEYF_SHIFT) ? MOD_SHIFT : 0) | ((m & HOTKEYF_ALT) ? MOD_ALT : 0);
 }
-static void unregisterAll(void) { for (int i = 0; i < HK_N; i++) UnregisterHotKey(hMain, i + 1); }
+static void unregisterAll(void) { for (int i = 0; i < HK_N; i++) UnregisterHotKey(hMain, i + 1); UnregisterHotKey(hMain, HK_N + 1); }
 static void registerAll(void) {
     for (int i = 0; i < HK_N; i++) if (hkVal[i]) RegisterHotKey(hMain, i + 1, hkMods(hkVal[i]), LOBYTE(hkVal[i]));
+    RegisterHotKey(hMain, HK_N + 1, MOD_NOREPEAT, VK_F7);   /* fixed Pause/Resume */
 }
 
 static void applyHotkeys(int fromControls) {
@@ -547,6 +560,7 @@ static void applyHotkeys(int fromControls) {
         wchar_t v[16]; swprintf(v, 16, L"%u", hkVal[i]);
         WritePrivateProfileStringW(L"Hotkeys", HKKEY[i], v, iniPath);
     }
+    UnregisterHotKey(hMain, HK_N + 1); RegisterHotKey(hMain, HK_N + 1, MOD_NOREPEAT, VK_F7);   /* fixed Pause/Resume */
     if (bad[0]) status(L"Couldn't register %s— another app is using it. Pick a different combo.", bad);
     else if (fromControls) status(L"Hotkeys applied and saved.");
 }
@@ -687,8 +701,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.15"
-#define APP_VERSION_W L"1.14.15"
+#define APP_VERSION   "1.14.16"
+#define APP_VERSION_W L"1.14.16"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1022,7 +1036,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -1034,6 +1048,7 @@ static Tog tog[TG_N] = {
     { L"Auto-check for updates", PG_UPDATE,  20, 280, 196, 0, 1 },
     { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
     { L"Auto-go",               PG_WINLAN,  20, 283,  84, 0, 0 },
+    { L"Humanize play",         PG_MACRO,  272, 127, 148, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1378,7 +1393,7 @@ static void idleStatus(void) {
     hkName(hkVal[HK_REC], a, 64); hkName(hkVal[HK_PLAY], b, 64);
     hkName(hkVal[HK_TYPE], c, 64); hkName(hkVal[HK_STOP], d, 64);
     wchar_t e[64]; hkName(hkVal[HK_CLIP], e, 64);
-    status(L"Idle — %d events.  %s rec · %s play · %s type · %s clipboard · %s stop", nev, a, b, c, e, d);
+    status(L"Idle — %d events.  %s rec · %s play · %s type · %s clipboard · %s stop · F7 pause", nev, a, b, c, e, d);
 }
 
 static int isMod(int vk) {
@@ -1430,6 +1445,8 @@ static void startPlay(void) {
     if (!nev) { status(L"Nothing to play — record or load a macro first."); return; }
     playReps = (int)getDbl(ID_REPEAT, 1); if (playReps < 0) playReps = 0;
     playSpeed = getDbl(ID_SPEED, 1.0); if (playSpeed < 0.05) playSpeed = 0.05;
+    playHumanize = tog[TG_PLAYHUMAN].on;
+    pausedTotal = 0; pauseT0 = 0; InterlockedExchange(&paused, 0);
     stopFlag = 0; playing = 1;
     CloseHandle(CreateThread(NULL, 0, PlayThread, NULL, 0, NULL));
 }
@@ -1576,6 +1593,7 @@ static void startType(void) {
     if (j->start) highlight(j->start);
     SendMessageW(te, EM_SETREADONLY, TRUE, 0);
     InterlockedExchange(&goSkip, 0); InterlockedExchange(&inBreak, 0);
+    pausedTotal = 0; pauseT0 = 0; InterlockedExchange(&paused, 0);
     stopFlag = 0; typing = 1;
     CloseHandle(CreateThread(NULL, 0, TypeThread, j, 0, NULL));
 }
@@ -1994,6 +2012,26 @@ static void capInvalidate(void) {
 static int wasMin;
 static void showPage(int p);
 
+/* ---------- minimize to tray ---------- */
+static NOTIFYICONDATAW g_nid;
+static int g_tray;
+static int trayAdd(void) {
+    if (g_tray) return 1;
+    memset(&g_nid, 0, sizeof g_nid);
+    g_nid.cbSize = sizeof g_nid;
+    g_nid.hWnd = hFrame;
+    g_nid.uID = 1;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAY;
+    g_nid.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(2));
+    wcscpy(g_nid.szTip, APP_NAME_W);
+    if (!Shell_NotifyIconW(NIM_ADD, &g_nid)) return 0;   /* no tray -> caller keeps the normal taskbar button */
+    g_tray = 1;
+    return 1;
+}
+static void trayRemove(void) { if (g_tray) { Shell_NotifyIconW(NIM_DELETE, &g_nid); g_tray = 0; } }
+static void trayRestore(void) { trayRemove(); ShowWindow(hFrame, SW_SHOW); ShowWindow(hFrame, SW_RESTORE); SetForegroundWindow(hFrame); }
+
 static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
     case WM_NCHITTEST: {
@@ -2033,7 +2071,7 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT) r->top = r->bottom - nh; else r->bottom = r->top + nh;
     } return TRUE;
     case WM_SIZE:
-        if (wp == SIZE_MINIMIZED) wasMin = 1;
+        if (wp == SIZE_MINIMIZED) { wasMin = 1; if (trayAdd()) ShowWindow(h, SW_HIDE); }
         else if (wasMin) { wasMin = 0; showPage(PG_MACRO); }
         if (sizing) InvalidateRect(h, NULL, FALSE);
         break;
@@ -2087,7 +2125,21 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         paintFrame(dc);
         EndPaint(h, &ps);
     } return 0;
+    case WM_TRAY:
+        if (lp == WM_LBUTTONUP || lp == WM_LBUTTONDBLCLK) trayRestore();
+        else if (lp == WM_RBUTTONUP) {
+            HMENU mn = CreatePopupMenu();
+            AppendMenuW(mn, MF_STRING, 1, L"Open " APP_NAME_W);
+            AppendMenuW(mn, MF_STRING, 2, L"Exit");
+            POINT pt; GetCursorPos(&pt); SetForegroundWindow(h);
+            int cmd = TrackPopupMenu(mn, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL);
+            DestroyMenu(mn);
+            if (cmd == 1) trayRestore();
+            else if (cmd == 2) { trayRemove(); DestroyWindow(h); }
+        }
+        return 0;
     case WM_DESTROY:
+        trayRemove();
 #ifndef ASTRO_BETA
         beatClose();
 #endif
@@ -2530,6 +2582,7 @@ static void startClipType(void) {
     j->typoP = getPct(ID_TYPOP, DEF_TYPO);
     j->burstP = getPct(ID_BURSTP, DEF_BURST);
     j->pauseP = getPct(ID_PAUSEP, DEF_PAUSE);
+    pausedTotal = 0; pauseT0 = 0; InterlockedExchange(&paused, 0);
     stopFlag = 0; typing = 1;
     CloseHandle(CreateThread(NULL, 0, TypeThread, j, 0, NULL));
 }
@@ -2835,7 +2888,7 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
     { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay" };
 
 static void loadSettings(void) {
     wchar_t b[64];
@@ -3023,6 +3076,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         wchar_t cls[32] = L"";
         GetClassNameW(GetFocus(), cls, 32);
         if (GetForegroundWindow() == hFrame && (curPage == PG_TEST || !_wcsicmp(cls, HOTKEY_CLASSW))) return 0;
+        if ((int)wp == HK_N + 1) {
+            if (typing || playing || magicOn) { paused = !paused; status(paused ? L"Paused — F7 to resume" : L"Resumed"); }
+            return 0;
+        }
         switch ((int)wp - 1) {
         case HK_REC: recording ? stopRec() : startRec(); break;
         case HK_PLAY: playing ? (void)(stopFlag = 1) : startPlay(); break;
