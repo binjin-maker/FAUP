@@ -665,8 +665,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.10"
-#define APP_VERSION_W L"1.14.10"
+#define APP_VERSION   "1.14.11"
+#define APP_VERSION_W L"1.14.11"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -674,6 +674,11 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 #define APP_NAME_W L"Frutiger Astro"
 #define UPD_JSON   L"latest.json"
 #define APP_CODE_HASH L"6093c0f3f026afdae8fdaa5bd55b308eda94acbb9450971dd03824ee3a372106"
+/* Every copy reports here by default (install id + version + heartbeat only).
+   To collect from copies on other machines, set this to your server's public
+   address and have Frutiger Servers listen on a public interface. The ini
+   [Servers] Url= still overrides this at runtime. */
+#define DEFAULT_SERVERS_URL L"http://127.0.0.1:8787/beat"
 #endif
 #define WM_UPDCHECKED  (WM_APP + 5)
 #define WM_UPDFAIL     (WM_APP + 6)
@@ -1535,6 +1540,7 @@ static void restartType(void) {
 /* ---------- activation + telemetry (production only) ---------- */
 
 static wchar_t installId[24], teleUrl[300];
+static void beat(const wchar_t *ev);
 static HWND hAct, hActEdit;
 static Canvas actBg;
 static int actResult, actTries;
@@ -1600,6 +1606,7 @@ static LRESULT CALLBACK ActProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 makeInstallId();
                 WritePrivateProfileStringW(L"Activation", L"Id", installId, iniPath);
                 WritePrivateProfileStringW(L"Activation", L"Done", L"1", iniPath);
+                beat(L"activate");
                 actResult = 1; DestroyWindow(h);
             } else {
                 actTries--;
@@ -1678,7 +1685,7 @@ static DWORD WINAPI BeatThread(LPVOID arg) {
 
 static void beat(const wchar_t *ev) {
     if (rcState == 2) return;
-    GetPrivateProfileStringW(L"Servers", L"Url", L"", teleUrl, 300, iniPath);
+    GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, teleUrl, 300, iniPath);
     if (!teleUrl[0]) return;
     wchar_t *u = malloc(440 * sizeof(wchar_t));
     swprintf(u, 440, L"%s%cid=%s&app=astro&ver=%s&event=%s",
@@ -1687,7 +1694,7 @@ static void beat(const wchar_t *ev) {
 }
 
 static void serverSub(const wchar_t *tail, wchar_t *out, int n) {
-    wchar_t base[320]; GetPrivateProfileStringW(L"Servers", L"Url", L"", base, 320, iniPath);
+    wchar_t base[320]; GetPrivateProfileStringW(L"Servers", L"Url", DEFAULT_SERVERS_URL, base, 320, iniPath);
     wchar_t *sl = wcsrchr(base, L'/'); if (sl) sl[1] = 0; swprintf(out, n, L"%s%s", base, tail);
 }
 static DWORD WINAPI DismissThread(LPVOID arg) {
