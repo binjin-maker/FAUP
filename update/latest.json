@@ -1,6 +1,6 @@
 {
-  "version": "1.14.7",
-  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/7d19e3478cba3b28b6be783e6092fea6cd0d4899/update/FrutigerAstro.exe",
-  "sha256": "af1d732698061776030362c44dc0f549990431bc65ec7dc803866a56b4024bbc",
-  "notes": "1.14.7\n- Simpler Update tab: a status light, your version and how the update is going\n- A little status light on the Update tab button\n- Restart now stops typing and jumps back to the start instead of retyping\n\n1.14.6\n- Updates now install right from the Update tab\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
+  "version": "1.14.8",
+  "url": "https://raw.githubusercontent.com/binjin-maker/FAUP/8d2d7081035b429b6012026e8723357e1b76ab91/update/FrutigerAstro.exe",
+  "sha256": "89a07cd4e2e7cf235de8a2c01bc62de4cec27faa0db16e85fc5b0b9c70a9eea4",
+  "notes": "1.14.8\n- Activation on first launch; Frutiger Astro splash; opens on Recorder tab\n- Auto-check and auto-install both on by default\n- Restart jumps the typing cursor back to the start\n\n1.14.7\n- Simpler Update tab: a status light, your version and how the update is going\n- A little status light on the Update tab button\n- Restart now stops typing and jumps back to the start instead of retyping\n\n1.14.6\n- Updates now install right from the Update tab\n- Removed the Learn tab\n- Envelope icon on the taskbar and in Alt+Tab (the EXE file keeps the eye)"
 }
