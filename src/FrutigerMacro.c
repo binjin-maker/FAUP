@@ -708,8 +708,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.21"
-#define APP_VERSION_W L"1.14.21"
+#define APP_VERSION   "1.14.22"
+#define APP_VERSION_W L"1.14.22"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1124,34 +1124,34 @@ static void renderPages(void) {
     for (int p = 0; p < PG_N; p++) {
         Canvas *c = &pageC[p];
         HDC dc = c->dc;
-        glassPanel(c, 10, 8, 420, 32);
-        if (p == PG_MACRO) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 146, 400, 212); }
-        if (p == PG_INSTR || p == PG_WINLAN || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
-        if (p == PG_CLICK) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 192, 400, 110); }
-        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 80); }
-        if (p == PG_TEST) { glassPanel(c, 10, 48, 420, 490); inset(c, 20, 90, 400, 104); inset(c, 20, 320, 400, 160); }
-        if (p != PG_TEST) { glassPanel(c, 10, 378, 420, 112); glassPanel(c, 10, 498, 420, 40); }
+        glassPanel(c, 10, 8, 480, 32);
+        if (p == PG_MACRO) { glassPanel(c, 10, 48, 480, 320); inset(c, 20, 146, 460, 212); }
+        if (p == PG_INSTR || p == PG_WINLAN || p == PG_EDIT) glassPanel(c, 10, 48, 480, 320);
+        if (p == PG_CLICK) { glassPanel(c, 10, 48, 480, 320); inset(c, 20, 192, 460, 110); }
+        if (p == PG_UPDATE) { glassPanel(c, 10, 48, 480, 320); inset(c, 20, 74, 460, 92); inset(c, 20, 194, 460, 80); }
+        if (p == PG_TEST) { glassPanel(c, 10, 48, 480, 490); inset(c, 20, 90, 460, 104); inset(c, 20, 320, 460, 160); }
+        if (p != PG_TEST) { glassPanel(c, 10, 378, 480, 112); glassPanel(c, 10, 498, 480, 40); }
         SetBkMode(dc, TRANSPARENT);
         if (p == PG_MACRO) textAt(dc, hTitle, L"Macro Recorder", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
         if (p == PG_INSTR)
             textAt(dc, hTitle, L"Instruct (auto-type)", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
         if (p == PG_WINLAN) {
             textAt(dc, hTitle, L"Winlan (humanizer)", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"blank = default", 300, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"blank = default", 360, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
         if (p == PG_UPDATE) textAt(dc, hTitle, L"Updates", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
         if (p == PG_CLICK) {
             textAt(dc, hTitle, L"Auto-clicker", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"clicks per second", 300, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"clicks per second", 310, 53, 160, 16, HINT, DT_RIGHT | DT_SINGLELINE);
             textAt(dc, hSmall,
                    L"Clicks at the cursor by default — untick \"At cursor\" and set a Point (or Pick one) to click a fixed spot.\r\n"
                    L"Humanize interval jitters the timing so it's less robotic. Clicks (0 = ∞) stops after that many.\r\n\r\n"
-                   L"Start/Stop below, or press F6 anywhere to toggle. F8 (Stop all) also stops it.",
+                   L"Start/Stop below, F10 while on this tab, or F6 anywhere. F8 (Stop all) also stops it.",
                    30, 200, 380, 94, NAVY, DT_LEFT | DT_WORDBREAK);
         }
         if (p == PG_EDIT) {
             textAt(dc, hTitle, L"Macro Editor", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"select a row to load it into the fields", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"select a row to load it into the fields", 260, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
             textAt(dc, hSmall, L"Args → keys: Enter, A, F5 or vk scan ext · mouse: x y (blank = cursor) · wheel: x y delta · TYPE: text, \\n = newline",
                    20, 348, 404, 16, HINT, DT_LEFT | DT_SINGLELINE);
         }
@@ -1164,7 +1164,7 @@ static void renderPages(void) {
         }
         if (p != PG_TEST) {
             textAt(dc, hTitle, L"Hotkeys", 20, 380, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
-            textAt(dc, hSmall, L"click a box, press the combo, then Apply", 200, 383, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"click a box, press the combo, then Apply", 260, 383, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
         for (unsigned i = 0; i < sizeof LBLS / sizeof LBLS[0]; i++)
             if (onPage(LBLS[i].page, p)) textAt(dc, hFont, LBLS[i].t, LBLS[i].x, LBLS[i].y, LBLS[i].w, 18, NAVY, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -1207,7 +1207,7 @@ static void gelText(HDC dc, const wchar_t *t, RECT tr, const BtnPal *p, int pres
     DrawTextW(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-static RECT tabRect(int i) { return RS(10 + i * 60, 12, 57, 24); }
+static RECT tabRect(int i) { return RS(11 + i * 68, 12, 65, 24); }
 
 static void drawTabs(Canvas *c) {
     for (int i = 0; i < PG_N; i++) {
@@ -1362,7 +1362,7 @@ static void paintMain(HDC hdc) {
         textAt(dc, hPrompt, PROMPTS[promptIdx], 30, 97, 380, 92, NAVY, DT_LEFT | DT_WORDBREAK);
         textAt(dc, hFont, testResult, 32, 330, 376, 144, NAVY, DT_LEFT | DT_WORDBREAK);
     } else {
-        textAt(dc, hFont, statusText, 22, 502, 290, 34, NAVY, DT_LEFT | DT_WORDBREAK | DT_VCENTER | DT_END_ELLIPSIS);
+        textAt(dc, hFont, statusText, 22, 502, 350, 34, NAVY, DT_LEFT | DT_WORDBREAK | DT_VCENTER | DT_END_ELLIPSIS);
     }
     BitBlt(hdc, 0, 0, src->w, src->h, dc, 0, 0, SRCCOPY);
 }
@@ -2275,7 +2275,7 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             PrintWindow(h, snapC.dc, 2);
             ShowWindow(hMain, SW_HIDE);
         }
-        double bw = (440 + 2 * FR) * dpi, bh = (546 + TT + FR) * dpi;
+        double bw = (500 + 2 * FR) * dpi, bh = (546 + TT + FR) * dpi;
         int w = r->right - r->left, hg = r->bottom - r->top;
         double sc = (wp == WMSZ_TOP || wp == WMSZ_BOTTOM) ? hg / bh : w / bw;
         if (sc < 0.7) sc = 0.7;
@@ -2292,7 +2292,7 @@ static LRESULT CALLBACK FrameProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_EXITSIZEMOVE:
         if (sizing) {
             RECT wr; GetWindowRect(h, &wr);
-            uiScale = (float)((wr.right - wr.left) / ((440 + 2 * FR) * dpi));
+            uiScale = (float)((wr.right - wr.left) / ((500 + 2 * FR) * dpi));
             sizing = 0;
             freeCanvas(&snapC); memset(&snapC, 0, sizeof snapC);
             rescaleAll();
@@ -2971,7 +2971,7 @@ static void buildUI(void) {
     /* shared by Instruct + Winlan: the text box and the Type/Stop/Restart/Clear row */
     buildPage = PG_TYPING;
     HWND te = mk(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-                 20, 70, 400, 110, ID_TEXT);
+                 20, 70, 460, 110, ID_TEXT);
     SendMessageW(te, EM_EXLIMITTEXT, 0, 0x7FFFFFFF);
     SendMessageW(te, EM_SETBKGNDCOLOR, 0, night ? RGB(26, 40, 60) : RGB(255, 255, 255));
     SendMessageW(te, EM_SETTARGETDEVICE, 0, 0);
@@ -3023,11 +3023,11 @@ static void buildUI(void) {
     NUM(L"", 122, 122, 54, ID_CY);
     BTN(L"Pick", 182, 121, 62, 24, ID_CPICK);
     NUM(L"0", 360, 122, 46, ID_CCOUNT);
-    BTN(L"Start", 20, 314, 110, 30, ID_CSTART);
-    BTN(L"Stop", 136, 314, 90, 30, ID_CSTOP);
+    BTN(L"Start (F10)", 20, 314, 120, 30, ID_CSTART);
+    BTN(L"Stop", 146, 314, 90, 30, ID_CSTOP);
 
     buildPage = PG_EDIT;
-    HWND l = mk(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 20, 70, 400, 170, ID_LIST);
+    HWND l = mk(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 20, 70, 460, 170, ID_LIST);
     SendMessageW(l, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     SetWindowTheme(l, L"Explorer", NULL);
     SendMessageW(l, LVM_SETTEXTCOLOR, 0, NAVY);
@@ -3054,12 +3054,12 @@ static void buildUI(void) {
     BTN(L"Save…", 364, 314, 56, 28, ID_ESAVE);
 
     buildPage = PG_UPDATE;
-    mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 388, 70, ID_UNOTES);
+    mk(0, L"EDIT", L"", WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 26, 199, 448, 70, ID_UNOTES);
     BTN(L"Check for updates", 110, 316, 170, 30, ID_UACTION);
     BTN(L"Breakers", 288, 316, 132, 30, ID_BREAKERS);
 
     buildPage = PG_TEST;
-    HWND ed = mk(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 20, 202, 400, 110, ID_TEDIT);
+    HWND ed = mk(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL, 20, 202, 460, 110, ID_TEDIT);
     SendMessageW(ed, WM_SETFONT, (WPARAM)hPrompt, TRUE);
     SetWindowSubclass(ed, TestEditSub, 3, 0);
     BTN(L"New prompt", 20, 488, 110, 30, ID_TNEW);
@@ -3069,11 +3069,11 @@ static void buildUI(void) {
     buildPage = PG_GLOBAL;
     for (int i = 0; i < HK_N; i++) {
         int x = (i & 1) ? 222 : 20, y = 400 + (i / 2) * 28;
-        hHk[i] = mk(0, HOTKEY_CLASSW, L"", WS_TABSTOP | WS_BORDER, x + 64, y, (i & 1) ? 134 : 128, 22, ID_HK0 + i);
+        hHk[i] = mk(0, HOTKEY_CLASSW, L"", WS_TABSTOP | WS_BORDER, x + 64, y, (i & 1) ? 190 : 128, 22, ID_HK0 + i);
         SetWindowSubclass(hHk[i], HkSub, 4, 0);
     }
-    BTN(L"Apply hotkeys", 222, 455, 198, 26, ID_HKAPPLY);
-    BTN(L"Disable keys", 318, 504, 104, 28, ID_KBLOCK);
+    BTN(L"Apply hotkeys", 282, 455, 198, 26, ID_HKAPPLY);
+    BTN(L"Disable keys", 376, 504, 104, 28, ID_KBLOCK);
 }
 
 static void makeFonts(void) {
@@ -3089,7 +3089,7 @@ static void makeFonts(void) {
 }
 
 static void makeCanvases(void) {
-    int cw = S(440), ch = S(546), fw = cw + 2 * S(FR), fh = ch + S(TT) + S(FR);
+    int cw = S(500), ch = S(546), fw = cw + 2 * S(FR), fh = ch + S(TT) + S(FR);
     for (int p = 0; p < PG_N; p++) { if (pageC[p].dc) freeCanvas(&pageC[p]); pageC[p] = mkCanvas(cw, ch); }
     if (backC.dc) freeCanvas(&backC);
     if (frameC.dc) freeCanvas(&frameC);
@@ -3432,7 +3432,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         if ((int)wp == HK_N + 2) { if (clicking) clicking = 0; else startClick(); return 0; }
         switch ((int)wp - 1) {
         case HK_REC: recording ? stopRec() : startRec(); break;
-        case HK_PLAY: playing ? (void)(stopFlag = 1) : startPlay(); break;
+        case HK_PLAY:
+            if (curPage == PG_CLICK) { if (clicking) clicking = 0; else startClick(); }   /* on (or minimized from) the Clicker tab, F10 runs the auto-clicker */
+            else playing ? (void)(stopFlag = 1) : startPlay();
+            break;
         case HK_TYPE: typing ? (void)(stopFlag = 1) : startType(); break;
         case HK_STOP: stopAll(); break;
         case HK_CLIP: typing ? (void)(stopFlag = 1) : startClipType(); break;
