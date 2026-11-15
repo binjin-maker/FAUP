@@ -152,6 +152,7 @@ wine build/FrutigerAstro.exe & sleep 10 && import -window root shot.png   # wind
 | Humanizer auto-go + review breaks | `HState`, `hDelay`/`hPause`, `reviewBreak`, `goSkip`/`inBreak`, `ID_GO` |
 | Diff-fixer ("Fix target") | `startDiffFix`, `DiffThread`, `clipGet`/`clipSet`, LCS walk |
 | Humanized playback / Pause (F7) | `PlayThread` (`playHumanize`), `paused` in `waitUntil`, `HK_N+1` hotkey |
+| Auto-clicker (Clicker tab, F6) | `ClickThread`, `startClick`, `PickThread`, `PG_CLICK`, `HK_N+2` hotkey |
 | Breakers panel (night mode, tray, splash, bubbles, confirm) | `runBreakers`, `BreakerProc`, `brk[]`/`BRK_*`, `loadBreakers`/`saveBreakers` |
 
 ## Troubleshooting

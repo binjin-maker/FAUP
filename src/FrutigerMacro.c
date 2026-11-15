@@ -42,6 +42,7 @@ enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
        ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES, ID_BREAKERS,
+       ID_CPS = 801, ID_CBTN, ID_CX, ID_CY, ID_CPICK, ID_CCOUNT, ID_CSTART, ID_CSTOP,
        ID_TEST = 501, ID_TRESTART, ID_TCLEAR, ID_TNEW, ID_TFIN, ID_TAPPLY, ID_TCLOSE, ID_TEDIT,
        ID_HK0 = 301, ID_HK1, ID_HK2, ID_HK3, ID_HKAPPLY, ID_STATUS = 400 };
 
@@ -61,7 +62,7 @@ static int night;   /* night (dark) theme — driven by brk[BRK_NIGHT] */
 enum { BRK_NIGHT, BRK_TRAY, BRK_SPLASH, BRK_BUBBLES, BRK_CONFIRM, BRK_N };
 static int brk[BRK_N] = { 0, 1, 1, 1, 0 };   /* night off, tray/splash/bubbles on, confirm off */
 static volatile LONG recording, playing, typing, stopFlag;
-static volatile LONG goSkip, inBreak, paused;
+static volatile LONG goSkip, inBreak, paused, clicking;
 static double pausedTotal, pauseT0;
 static DWORD lastT, lastMoveT;
 static int recMoves = 1, playReps = 1, playHumanize = 0;
@@ -540,10 +541,11 @@ static UINT hkMods(WORD v) {
     return MOD_NOREPEAT | ((m & HOTKEYF_CONTROL) ? MOD_CONTROL : 0) |
            ((m & HOTKEYF_SHIFT) ? MOD_SHIFT : 0) | ((m & HOTKEYF_ALT) ? MOD_ALT : 0);
 }
-static void unregisterAll(void) { for (int i = 0; i < HK_N; i++) UnregisterHotKey(hMain, i + 1); UnregisterHotKey(hMain, HK_N + 1); }
+static void unregisterAll(void) { for (int i = 0; i < HK_N; i++) UnregisterHotKey(hMain, i + 1); UnregisterHotKey(hMain, HK_N + 1); UnregisterHotKey(hMain, HK_N + 2); }
 static void registerAll(void) {
     for (int i = 0; i < HK_N; i++) if (hkVal[i]) RegisterHotKey(hMain, i + 1, hkMods(hkVal[i]), LOBYTE(hkVal[i]));
     RegisterHotKey(hMain, HK_N + 1, MOD_NOREPEAT, VK_F7);   /* fixed Pause/Resume */
+    RegisterHotKey(hMain, HK_N + 2, MOD_NOREPEAT, VK_F6);   /* fixed auto-clicker toggle */
 }
 
 static void applyHotkeys(int fromControls) {
@@ -565,6 +567,7 @@ static void applyHotkeys(int fromControls) {
         WritePrivateProfileStringW(L"Hotkeys", HKKEY[i], v, iniPath);
     }
     UnregisterHotKey(hMain, HK_N + 1); RegisterHotKey(hMain, HK_N + 1, MOD_NOREPEAT, VK_F7);   /* fixed Pause/Resume */
+    UnregisterHotKey(hMain, HK_N + 2); RegisterHotKey(hMain, HK_N + 2, MOD_NOREPEAT, VK_F6);   /* fixed auto-clicker toggle */
     if (bad[0]) status(L"Couldn't register %s— another app is using it. Pick a different combo.", bad);
     else if (fromControls) status(L"Hotkeys applied and saved.");
 }
@@ -705,8 +708,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.19"
-#define APP_VERSION_W L"1.14.19"
+#define APP_VERSION   "1.14.20"
+#define APP_VERSION_W L"1.14.20"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1005,8 +1008,8 @@ static void restartUpdated(void) {
 
 /* ---------- pages, layout, painting ---------- */
 
-enum { PG_MACRO, PG_INSTR, PG_WINLAN, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1, PG_TYPING = -2 };
-static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Instruct", L"Winlan", L"Editor", L"Test", L"Update" };
+enum { PG_MACRO, PG_CLICK, PG_INSTR, PG_WINLAN, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1, PG_TYPING = -2 };
+static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Clicker", L"Instruct", L"Winlan", L"Editor", L"Test", L"Update" };
 static int curPage = PG_MACRO, tabHover = -1;
 
 static Canvas pageC[PG_N], backC;
@@ -1041,7 +1044,7 @@ static void textAt(HDC dc, HFONT f, const wchar_t *t, int lx, int ly, int lw, in
     DrawTextW(dc, t, -1, &r, fmt);
 }
 
-enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_N };
+enum { TG_MOVES, TG_FIXWPM, TG_FIXMS, TG_HUMAN, TG_TYPOS, TG_DOCS, TG_UCHECK, TG_UAUTO, TG_AUTOGO, TG_PLAYHUMAN, TG_CLKCUR, TG_CLKHUMAN, TG_N };
 typedef struct { const wchar_t *t; int page, x, y, w, radio, on; } Tog;
 static Tog tog[TG_N] = {
     { L"Record mouse moves",    PG_MACRO, 272, 112, 148, 0, 1 },
@@ -1054,6 +1057,8 @@ static Tog tog[TG_N] = {
     { L"Auto-install updates",   PG_UPDATE, 222, 280, 198, 0, 1 },
     { L"Auto-go",               PG_WINLAN,  20, 283,  84, 0, 0 },
     { L"Humanize play",         PG_MACRO,  272, 127, 148, 0, 0 },
+    { L"At cursor",             PG_CLICK,  20, 155, 100, 0, 1 },
+    { L"Humanize interval",     PG_CLICK, 150, 155, 160, 0, 0 },
 };
 
 typedef struct { const wchar_t *t; int page, x, y, w; } Lbl;
@@ -1069,6 +1074,8 @@ static const Lbl LBLS[] = {
     { L"Chunk:", PG_WINLAN, 108, 286, 42 }, { L"Break:", PG_WINLAN, 200, 286, 40 }, { L"to", PG_WINLAN, 274, 286, 14 }, { L"min", PG_WINLAN, 322, 286, 28 },
     { L"Delay:", PG_EDIT, 20, 251, 40 }, { L"Event:", PG_EDIT, 124, 251, 40 }, { L"Args:", PG_EDIT, 266, 251, 32 },
     { L"Scale delays ×", PG_EDIT, 20, 319, 88 },
+    { L"Clicks/sec:", PG_CLICK, 20, 94, 74 }, { L"Button:", PG_CLICK, 162, 94, 50 },
+    { L"Point:", PG_CLICK, 20, 126, 42 }, { L"Clicks (0 = ∞):", PG_CLICK, 256, 126, 98 },
 };
 
 static int onPage(int tag, int p) { return tag == p || (tag == PG_GLOBAL && p != PG_TEST) || (tag == PG_TYPING && (p == PG_INSTR || p == PG_WINLAN)); }
@@ -1120,6 +1127,7 @@ static void renderPages(void) {
         glassPanel(c, 10, 8, 420, 32);
         if (p == PG_MACRO) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 146, 400, 212); }
         if (p == PG_INSTR || p == PG_WINLAN || p == PG_EDIT) glassPanel(c, 10, 48, 420, 320);
+        if (p == PG_CLICK) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 192, 400, 110); }
         if (p == PG_UPDATE) { glassPanel(c, 10, 48, 420, 320); inset(c, 20, 74, 400, 92); inset(c, 20, 194, 400, 80); }
         if (p == PG_TEST) { glassPanel(c, 10, 48, 420, 490); inset(c, 20, 90, 400, 104); inset(c, 20, 320, 400, 160); }
         if (p != PG_TEST) { glassPanel(c, 10, 378, 420, 112); glassPanel(c, 10, 498, 420, 40); }
@@ -1132,6 +1140,15 @@ static void renderPages(void) {
             textAt(dc, hSmall, L"blank = default", 300, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
         }
         if (p == PG_UPDATE) textAt(dc, hTitle, L"Updates", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+        if (p == PG_CLICK) {
+            textAt(dc, hTitle, L"Auto-clicker", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
+            textAt(dc, hSmall, L"clicks per second", 300, 53, 110, 16, HINT, DT_RIGHT | DT_SINGLELINE);
+            textAt(dc, hSmall,
+                   L"Clicks at the cursor by default — untick \"At cursor\" and set a Point (or Pick one) to click a fixed spot.\r\n"
+                   L"Humanize interval jitters the timing so it's less robotic. Clicks (0 = ∞) stops after that many.\r\n\r\n"
+                   L"Start/Stop below, or press F6 anywhere to toggle. F8 (Stop all) also stops it.",
+                   30, 200, 380, 94, NAVY, DT_LEFT | DT_WORDBREAK);
+        }
         if (p == PG_EDIT) {
             textAt(dc, hTitle, L"Macro Editor", 20, 50, 300, 18, NAVY, DT_LEFT | DT_SINGLELINE);
             textAt(dc, hSmall, L"select a row to load it into the fields", 200, 53, 220, 16, HINT, DT_RIGHT | DT_SINGLELINE);
@@ -1190,7 +1207,7 @@ static void gelText(HDC dc, const wchar_t *t, RECT tr, const BtnPal *p, int pres
     DrawTextW(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-static RECT tabRect(int i) { return RS(13 + i * 69, 12, 66, 24); }
+static RECT tabRect(int i) { return RS(10 + i * 60, 12, 57, 24); }
 
 static void drawTabs(Canvas *c) {
     for (int i = 0; i < PG_N; i++) {
@@ -1365,9 +1382,9 @@ static void drawButton(DRAWITEMSTRUCT *d) {
         }
     }
     UINT id = d->CtlID;
-    const BtnPal *p = (id == ID_REC || id == ID_EDEL || id == ID_PDEL || (id == ID_KBLOCK && kbBlocked) || (id == ID_MAGIC && magicOn)) ? &PAL_RED :
+    const BtnPal *p = (id == ID_REC || id == ID_EDEL || id == ID_PDEL || id == ID_CSTOP || (id == ID_KBLOCK && kbBlocked) || (id == ID_MAGIC && magicOn)) ? &PAL_RED :
                       id == ID_MAGIC ? &PAL_PURPLE :
-                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || id == ID_GO || (id == ID_UACTION && updAvail)) ? &PAL_GREEN : &PAL_BLUE;
+                      (id == ID_PLAY || id == ID_TYPE || id == ID_TAPPLY || id == ID_EINS || id == ID_PSAVE || id == ID_GO || id == ID_CSTART || (id == ID_UACTION && updAvail)) ? &PAL_GREEN : &PAL_BLUE;
     int pressed = (d->itemState & ODS_SELECTED) != 0;
     gel(c, 1, 1, w - 2, h - 3, fmin((h - 3) / 2.0, S(9)), p, d->hwndItem == hoverBtn, pressed);
     wchar_t t[96]; GetWindowTextW(d->hwndItem, t, 96);
@@ -1394,7 +1411,7 @@ static LRESULT CALLBACK BtnSub(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR id
 
 /* ---------- actions ---------- */
 
-static int busy(void) { return recording || playing || typing || magicOn; }
+static int busy(void) { return recording || playing || typing || magicOn || clicking; }
 
 static void idleStatus(void) {
     wchar_t a[64], b[64], c[64], d[64];
@@ -1745,8 +1762,61 @@ static void startDiffFix(void) {
 static void magicStop(int finished);
 static void stopAll(void) {
     stopFlag = 1;
+    clicking = 0;
     magicStop(0);
     if (recording) stopRec();
+}
+
+/* ---------- auto-clicker ---------- */
+static int clkBtn, clkCount, clkAtCur, clkHuman, clkX, clkY;
+static double clkInterval;
+static DWORD WINAPI ClickThread(LPVOID arg) {
+    (void)arg;
+    const DWORD dn[3] = { MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_MIDDLEDOWN };
+    const DWORD up[3] = { MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEUP };
+    int b = clkBtn < 0 || clkBtn > 2 ? 0 : clkBtn;
+    long n = 0;
+    while (clicking && !stopFlag) {
+        POINT p;
+        if (clkAtCur) GetCursorPos(&p); else { p.x = clkX; p.y = clkY; }
+        sendMouse(p.x, p.y, dn[b], 0);
+        sendMouse(p.x, p.y, up[b], 0);
+        if (clkCount > 0 && ++n >= clkCount) break;
+        double iv = clkInterval;
+        if (clkHuman) iv *= 1.0 + 0.25 * gauss();
+        if (iv < 1) iv = 1;
+        double endT = nowMs() + iv;
+        while (clicking && !stopFlag) { double r = endT - nowMs(); if (r <= 0) break; Sleep(r > 20 ? 12 : 1); }
+    }
+    clicking = 0;
+    PostMessageW(hMain, WM_DONE, 0, 0);
+    return 0;
+}
+static void startClick(void) {
+    if (clicking) return;
+    if (busy()) { status(L"Stop the current task before auto-clicking."); return; }
+    double cps = getDbl(ID_CPS, 10); if (cps <= 0) cps = 10; if (cps > 1000) cps = 1000;
+    clkInterval = 1000.0 / cps;
+    clkBtn = (int)SendMessageW(GetDlgItem(hMain, ID_CBTN), CB_GETCURSEL, 0, 0); if (clkBtn < 0) clkBtn = 0;
+    clkAtCur = tog[TG_CLKCUR].on; clkHuman = tog[TG_CLKHUMAN].on;
+    clkCount = (int)getDbl(ID_CCOUNT, 0); if (clkCount < 0) clkCount = 0;
+    clkX = (int)getDbl(ID_CX, 0); clkY = (int)getDbl(ID_CY, 0);
+    stopFlag = 0; clicking = 1;
+    CloseHandle(CreateThread(NULL, 0, ClickThread, NULL, 0, NULL));
+    status(L"● Auto-clicking — %.0f/s · %s%s · F6 or F8 to stop",
+           cps, clkBtn == 1 ? L"right" : clkBtn == 2 ? L"middle" : L"left",
+           clkAtCur ? L" at cursor" : L" at point");
+}
+static DWORD WINAPI PickThread(LPVOID arg) {
+    (void)arg;
+    for (int s = 3; s > 0; s--) { status(L"Move the mouse to the target — capturing in %d…", s); Sleep(1000); }
+    POINT p; GetCursorPos(&p);
+    wchar_t b[16];
+    swprintf(b, 16, L"%ld", p.x); SetDlgItemTextW(hMain, ID_CX, b);
+    swprintf(b, 16, L"%ld", p.y); SetDlgItemTextW(hMain, ID_CY, b);
+    tog[TG_CLKCUR].on = 0; InvalidateRect(hMain, NULL, FALSE);
+    status(L"Point set to %ld, %ld — \"At cursor\" turned off.", p.x, p.y);
+    return 0;
 }
 
 static int rewindPending;
@@ -2941,6 +3011,21 @@ static void buildUI(void) {
     BTN(L"Magic", 342, 314, 78, 30, ID_MAGIC);
     SendMessageW(te, EM_SETEVENTMASK, 0, ENM_CHANGE);
 
+    /* Clicker: the auto-clicker */
+    buildPage = PG_CLICK;
+    NUM(L"10", 98, 90, 48, ID_CPS);
+    HWND cb = mk(0, L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, 214, 90, 96, 220, ID_CBTN);
+    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)L"Left");
+    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)L"Right");
+    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)L"Middle");
+    SendMessageW(cb, CB_SETCURSEL, 0, 0);
+    NUM(L"", 64, 122, 54, ID_CX);
+    NUM(L"", 122, 122, 54, ID_CY);
+    BTN(L"Pick", 182, 121, 62, 24, ID_CPICK);
+    NUM(L"0", 360, 122, 46, ID_CCOUNT);
+    BTN(L"Start", 20, 314, 110, 30, ID_CSTART);
+    BTN(L"Stop", 136, 314, 90, 30, ID_CSTOP);
+
     buildPage = PG_EDIT;
     HWND l = mk(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 20, 70, 400, 170, ID_LIST);
     SendMessageW(l, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
@@ -3041,8 +3126,9 @@ static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
     { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" }, { ID_NAVMS, L"FixNavMs" }, { ID_DEDITS, L"FixEdits" },
+    { ID_CPS, L"ClickCps" }, { ID_CX, L"ClickX" }, { ID_CY, L"ClickY" }, { ID_CCOUNT, L"ClickCount" },
 };
-static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay" };
+static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay", L"ClickAtCursor", L"ClickHumanize" };
 
 static const wchar_t *BRKKEY[BRK_N] = { L"Night", L"Tray", L"Splash", L"Bubbles", L"ConfirmExit" };
 static void loadBreakers(void) {
@@ -3254,6 +3340,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_TNEW: newPrompt(1); break;
         case ID_UACTION: if (!updBusy && !rcState) { if (updAvail) startInstall(); else startCheck(); } break;
         case ID_BREAKERS: runBreakers(); break;
+        case ID_CSTART: startClick(); break;
+        case ID_CSTOP: clicking = 0; break;
+        case ID_CPICK: CloseHandle(CreateThread(NULL, 0, PickThread, NULL, 0, NULL)); break;
         case ID_KBLOCK: toggleKb(); break;
         case ID_MAGIC: if (magicOn) magicStop(0); else magicStart(); break;
         case ID_EUPD: case ID_EINS: case ID_EDEL: case ID_EUP: case ID_EDOWN: case ID_ESCALEGO: case ID_ESTRIP:
@@ -3340,6 +3429,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             if (typing || playing || magicOn) { paused = !paused; status(paused ? L"Paused — F7 to resume" : L"Resumed"); }
             return 0;
         }
+        if ((int)wp == HK_N + 2) { if (clicking) clicking = 0; else startClick(); return 0; }
         switch ((int)wp - 1) {
         case HK_REC: recording ? stopRec() : startRec(); break;
         case HK_PLAY: playing ? (void)(stopFlag = 1) : startPlay(); break;
