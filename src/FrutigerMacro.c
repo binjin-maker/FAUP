@@ -708,8 +708,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.20"
-#define APP_VERSION_W L"1.14.20"
+#define APP_VERSION   "1.14.21"
+#define APP_VERSION_W L"1.14.21"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1009,7 +1009,7 @@ static void restartUpdated(void) {
 /* ---------- pages, layout, painting ---------- */
 
 enum { PG_MACRO, PG_CLICK, PG_INSTR, PG_WINLAN, PG_EDIT, PG_TEST, PG_UPDATE, PG_N, PG_GLOBAL = -1, PG_TYPING = -2 };
-static const wchar_t *TABNAME[PG_N] = { L"Recorder", L"Clicker", L"Instruct", L"Winlan", L"Editor", L"Test", L"Update" };
+static const wchar_t *TABNAME[PG_N] = { L"Macro", L"Clicker", L"Instruct", L"Winlan", L"Editor", L"Test", L"Update" };
 static int curPage = PG_MACRO, tabHover = -1;
 
 static Canvas pageC[PG_N], backC;
