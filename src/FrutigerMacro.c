@@ -60,7 +60,7 @@ static Ev *ev; static int nev, cap;
 static int night;   /* night (dark) theme — driven by brk[BRK_NIGHT] */
 /* ---- Breakers: small cosmetic switches on the Update tab ---- */
 enum { BRK_NIGHT, BRK_TRAY, BRK_SPLASH, BRK_BUBBLES, BRK_CONFIRM, BRK_N };
-static int brk[BRK_N] = { 0, 1, 1, 1, 0 };   /* night off, tray/splash/bubbles on, confirm off */
+static int brk[BRK_N] = { 0, 0, 1, 1, 0 };   /* night off, tray off, splash/bubbles on, confirm off */
 static volatile LONG recording, playing, typing, stopFlag;
 static volatile LONG goSkip, inBreak, paused, clicking;
 static double pausedTotal, pauseT0;
@@ -708,8 +708,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.22"
-#define APP_VERSION_W L"1.14.22"
+#define APP_VERSION   "1.14.23"
+#define APP_VERSION_W L"1.14.23"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -3133,7 +3133,7 @@ static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFi
 static const wchar_t *BRKKEY[BRK_N] = { L"Night", L"Tray", L"Splash", L"Bubbles", L"ConfirmExit" };
 static void loadBreakers(void) {
     int oldNight = GetPrivateProfileIntW(L"Settings", L"Night", 0, iniPath);  /* migrate pre-1.14.19 */
-    int def[BRK_N] = { oldNight, 1, 1, 1, 0 };
+    int def[BRK_N] = { oldNight, 0, 1, 1, 0 };
     for (int i = 0; i < BRK_N; i++) brk[i] = GetPrivateProfileIntW(L"Breakers", BRKKEY[i], def[i], iniPath) != 0;
     night = brk[BRK_NIGHT];
 }
