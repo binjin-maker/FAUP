@@ -25,6 +25,7 @@
 #define WM_DONE   (WM_APP + 2)
 #define WM_GOBREAK (WM_APP + 12)
 #define WM_TRAY    (WM_APP + 13)
+#define WM_CLKSTOP (WM_APP + 14)
 #define WM_HL     (WM_APP + 3)
 #define HL(i) PostMessageW(hMain, WM_HL, (WPARAM)(INT_PTR)(i), 0)
 #define HLJ(j, i) do { if (!(j)->clip) HL(i); } while (0)
@@ -708,8 +709,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.23"
-#define APP_VERSION_W L"1.14.23"
+#define APP_VERSION   "1.14.24"
+#define APP_VERSION_W L"1.14.24"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1760,9 +1761,11 @@ static void startDiffFix(void) {
 }
 
 static void magicStop(int finished);
+static void clickStopSync(void);
+
 static void stopAll(void) {
     stopFlag = 1;
-    clicking = 0;
+    clickStopSync();
     magicStop(0);
     if (recording) stopRec();
 }
@@ -1770,6 +1773,30 @@ static void stopAll(void) {
 /* ---------- auto-clicker ---------- */
 static int clkBtn, clkCount, clkAtCur, clkHuman, clkX, clkY;
 static double clkInterval;
+static HANDLE hClick;
+static HHOOK hClkHook;
+
+/* Stop the clicker, wait for its thread to finish the in-flight click, and
+   force every mouse button up so a killed-mid-click button can't stick down. */
+static void clickStopSync(void) {
+    if (hClkHook) { UnhookWindowsHookEx(hClkHook); hClkHook = NULL; }
+    if (!hClick && !clicking) return;
+    clicking = 0;
+    if (hClick) { WaitForSingleObject(hClick, 400); CloseHandle(hClick); hClick = NULL; }
+    POINT p; GetCursorPos(&p);
+    const DWORD up[3] = { MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEUP };
+    for (int i = 0; i < 3; i++) sendMouse(p.x, p.y, up[i], 0);
+}
+
+/* Global emergency stop: a low-level keyboard hook that catches F8/F6 even when
+   the app isn't focused or a game swallows the registered hotkey. */
+static LRESULT CALLBACK ClkKbProc(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION && (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN)) {
+        DWORD vk = ((KBDLLHOOKSTRUCT *)lp)->vkCode;
+        if (vk == VK_F8 || vk == VK_F6) { clicking = 0; PostMessageW(hMain, WM_CLKSTOP, 0, 0); }
+    }
+    return CallNextHookEx(NULL, code, wp, lp);
+}
 static DWORD WINAPI ClickThread(LPVOID arg) {
     (void)arg;
     const DWORD dn[3] = { MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_MIDDLEDOWN };
@@ -1789,7 +1816,7 @@ static DWORD WINAPI ClickThread(LPVOID arg) {
         while (clicking && !stopFlag) { double r = endT - nowMs(); if (r <= 0) break; Sleep(r > 20 ? 12 : 1); }
     }
     clicking = 0;
-    PostMessageW(hMain, WM_DONE, 0, 0);
+    PostMessageW(hMain, WM_CLKSTOP, 0, 0);
     return 0;
 }
 static void startClick(void) {
@@ -1801,8 +1828,11 @@ static void startClick(void) {
     clkAtCur = tog[TG_CLKCUR].on; clkHuman = tog[TG_CLKHUMAN].on;
     clkCount = (int)getDbl(ID_CCOUNT, 0); if (clkCount < 0) clkCount = 0;
     clkX = (int)getDbl(ID_CX, 0); clkY = (int)getDbl(ID_CY, 0);
+    if (hClick) { CloseHandle(hClick); hClick = NULL; }
     stopFlag = 0; clicking = 1;
-    CloseHandle(CreateThread(NULL, 0, ClickThread, NULL, 0, NULL));
+    hClick = CreateThread(NULL, 0, ClickThread, NULL, 0, NULL);
+    if (hClkHook) UnhookWindowsHookEx(hClkHook);
+    hClkHook = SetWindowsHookExW(WH_KEYBOARD_LL, ClkKbProc, GetModuleHandleW(NULL), 0);
     status(L"● Auto-clicking — %.0f/s · %s%s · F6 or F8 to stop",
            cps, clkBtn == 1 ? L"right" : clkBtn == 2 ? L"middle" : L"left",
            clkAtCur ? L" at cursor" : L" at point");
@@ -3341,7 +3371,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         case ID_UACTION: if (!updBusy && !rcState) { if (updAvail) startInstall(); else startCheck(); } break;
         case ID_BREAKERS: runBreakers(); break;
         case ID_CSTART: startClick(); break;
-        case ID_CSTOP: clicking = 0; break;
+        case ID_CSTOP: clickStopSync(); break;
         case ID_CPICK: CloseHandle(CreateThread(NULL, 0, PickThread, NULL, 0, NULL)); break;
         case ID_KBLOCK: toggleKb(); break;
         case ID_MAGIC: if (magicOn) magicStop(0); else magicStart(); break;
@@ -3429,11 +3459,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             if (typing || playing || magicOn) { paused = !paused; status(paused ? L"Paused — F7 to resume" : L"Resumed"); }
             return 0;
         }
-        if ((int)wp == HK_N + 2) { if (clicking) clicking = 0; else startClick(); return 0; }
+        if ((int)wp == HK_N + 2) { if (clicking) clickStopSync(); else startClick(); return 0; }
         switch ((int)wp - 1) {
         case HK_REC: recording ? stopRec() : startRec(); break;
         case HK_PLAY:
-            if (curPage == PG_CLICK) { if (clicking) clicking = 0; else startClick(); }   /* on (or minimized from) the Clicker tab, F10 runs the auto-clicker */
+            if (curPage == PG_CLICK) { if (clicking) clickStopSync(); else startClick(); }   /* on (or minimized from) the Clicker tab, F10 runs the auto-clicker */
             else playing ? (void)(stopFlag = 1) : startPlay();
             break;
         case HK_TYPE: typing ? (void)(stopFlag = 1) : startType(); break;
@@ -3462,6 +3492,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             else idleStatus();
         }
         return 0;
+    case WM_CLKSTOP: clickStopSync(); if (!busy()) idleStatus(); return 0;
     case WM_HL: highlight((int)(INT_PTR)wp); return 0;
     case WM_KBTOGGLE: toggleKb(); return 0;
     case WM_MAGIC: magicKey((int)wp); return 0;
