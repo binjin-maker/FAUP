@@ -186,6 +186,16 @@ static void sendChar(wchar_t ch) {
     SendInput(2, in, sizeof(INPUT));
 }
 
+/* Button press at the current cursor, with no move — avoids absolute-coordinate
+   jitter that nudges the cursor on every at-cursor auto-click. */
+static void mouseBtn(DWORD flag, int data) {
+    INPUT in = {0};
+    in.type = INPUT_MOUSE;
+    in.mi.mouseData = data;
+    in.mi.dwFlags = flag;
+    SendInput(1, &in, sizeof in);
+}
+
 static void sendMouse(int x, int y, DWORD flags, int data) {
     int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
     int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
@@ -709,8 +719,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.24"
-#define APP_VERSION_W L"1.14.24"
+#define APP_VERSION   "1.14.25"
+#define APP_VERSION_W L"1.14.25"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1783,9 +1793,8 @@ static void clickStopSync(void) {
     if (!hClick && !clicking) return;
     clicking = 0;
     if (hClick) { WaitForSingleObject(hClick, 400); CloseHandle(hClick); hClick = NULL; }
-    POINT p; GetCursorPos(&p);
     const DWORD up[3] = { MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEUP };
-    for (int i = 0; i < 3; i++) sendMouse(p.x, p.y, up[i], 0);
+    for (int i = 0; i < 3; i++) mouseBtn(up[i], 0);
 }
 
 /* Global emergency stop: a low-level keyboard hook that catches F8/F6 even when
@@ -1804,10 +1813,13 @@ static DWORD WINAPI ClickThread(LPVOID arg) {
     int b = clkBtn < 0 || clkBtn > 2 ? 0 : clkBtn;
     long n = 0;
     while (clicking && !stopFlag) {
-        POINT p;
-        if (clkAtCur) GetCursorPos(&p); else { p.x = clkX; p.y = clkY; }
-        sendMouse(p.x, p.y, dn[b], 0);
-        sendMouse(p.x, p.y, up[b], 0);
+        if (clkAtCur) {   /* click where the cursor already is, without moving it */
+            mouseBtn(dn[b], 0);
+            mouseBtn(up[b], 0);
+        } else {
+            sendMouse(clkX, clkY, dn[b], 0);
+            sendMouse(clkX, clkY, up[b], 0);
+        }
         if (clkCount > 0 && ++n >= clkCount) break;
         double iv = clkInterval;
         if (clkHuman) iv *= 1.0 + 0.25 * gauss();
