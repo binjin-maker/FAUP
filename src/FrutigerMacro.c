@@ -719,8 +719,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.14.25"
-#define APP_VERSION_W L"1.14.25"
+#define APP_VERSION   "1.67.67"
+#define APP_VERSION_W L"1.67.67"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
