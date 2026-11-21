@@ -39,7 +39,7 @@ typedef struct { DWORD delay; int type, a, b, c; wchar_t *text; } Ev;
 
 enum { ID_REC = 101, ID_STOP, ID_PLAY, ID_SAVE, ID_LOAD, ID_CLEAR, ID_REPEAT, ID_SPEED, ID_MOVES,
        ID_TEXT = 201, ID_FIXWPM, ID_FIXMS, ID_HUMAN, ID_WPM, ID_MS, ID_DELAY, ID_TYPOS, ID_TYPE, ID_TSTOP,
-       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT, ID_DIFFFIX, ID_NAVMS, ID_DEDITS,
+       ID_TYPOP, ID_BURSTP, ID_PAUSEP, ID_CHUNK, ID_CHUNKMAX, ID_BRKMIN, ID_BRKMAX, ID_GO, ID_LOADTXT, ID_DIFFFIX, ID_NAVMS, ID_DEDITS,
        ID_LIST = 601, ID_EDELAY, ID_EEVENT, ID_EARGS, ID_EUPD, ID_EINS, ID_EDEL, ID_EUP, ID_EDOWN,
        ID_ESCALE, ID_ESCALEGO, ID_ESTRIP, ID_ESAVE, ID_PRESET, ID_PSAVE, ID_PDEL,
        ID_UACTION = 701, ID_KBLOCK, ID_MAGIC, ID_UNOTES, ID_BREAKERS,
@@ -284,7 +284,7 @@ typedef struct {
     wchar_t *text; int mode, wpm, ms, delay, typos;
     double typoP, burstP, pauseP;
     int docsSafe, start, pending, stopAt, stopExtra, clip;
-    int autoGo, chunk; double brkMin, brkMax;
+    int autoGo, chunkMin, chunkMax, chunk; double brkMin, brkMax;
 } TypeJob;
 
 static volatile int resumeIdx, resumePending;
@@ -388,6 +388,7 @@ static void humanType(TypeJob *j) {
         j->stopAt = i + 1;
         if (j->autoGo && i + 1 < len && ++sinceBreak >= j->chunk && (c == L' ' || c == L'\n')) {
             sinceBreak = 0;
+            j->chunk = (int)rrange(j->chunkMin, j->chunkMax);   /* fresh target so breaks aren't evenly spaced */
             double endT = nowMs() + rrange(j->brkMin, j->brkMax);
             InterlockedExchange(&goSkip, 0);
             PostMessageW(hMain, WM_GOBREAK, 1, 0);
@@ -719,8 +720,8 @@ static void bubble(Canvas *c, double cx, double cy, double r) {
 
 /* ---------- updater ---------- */
 
-#define APP_VERSION   "1.67.67"
-#define APP_VERSION_W L"1.67.67"
+#define APP_VERSION   "1.67.68"
+#define APP_VERSION_W L"1.67.68"
 #ifdef ASTRO_BETA
 #define APP_NAME_W L"Astro Beta"
 #define UPD_JSON   L"beta.json"
@@ -1082,7 +1083,8 @@ static const Lbl LBLS[] = {
     { L"Auto-type:", PG_GLOBAL, 20, 431, 62 }, { L"Stop all:", PG_GLOBAL, 222, 431, 62 },
     { L"Clipboard:", PG_GLOBAL, 20, 459, 62 },
     { L"Preset:", PG_WINLAN, 20, 191, 44 },
-    { L"Chunk:", PG_WINLAN, 108, 286, 42 }, { L"Break:", PG_WINLAN, 200, 286, 40 }, { L"to", PG_WINLAN, 274, 286, 14 }, { L"min", PG_WINLAN, 322, 286, 28 },
+    { L"Chunk:", PG_WINLAN, 108, 286, 42 }, { L"to", PG_WINLAN, 192, 286, 14 },
+    { L"Break:", PG_WINLAN, 256, 286, 40 }, { L"to", PG_WINLAN, 330, 286, 14 }, { L"min", PG_WINLAN, 380, 286, 28 },
     { L"Delay:", PG_EDIT, 20, 251, 40 }, { L"Event:", PG_EDIT, 124, 251, 40 }, { L"Args:", PG_EDIT, 266, 251, 32 },
     { L"Scale delays ×", PG_EDIT, 20, 319, 88 },
     { L"Clicks/sec:", PG_CLICK, 20, 94, 74 }, { L"Button:", PG_CLICK, 162, 94, 50 },
@@ -1625,7 +1627,9 @@ static void startType(void) {
     j->burstP = getPct(ID_BURSTP, DEF_BURST);
     j->pauseP = getPct(ID_PAUSEP, DEF_PAUSE);
     j->autoGo = tog[TG_AUTOGO].on && j->mode == ID_HUMAN;
-    j->chunk = (int)getDbl(ID_CHUNK, 1500); if (j->chunk < 50) j->chunk = 50;
+    j->chunkMin = (int)getDbl(ID_CHUNK, 1000); if (j->chunkMin < 50) j->chunkMin = 50;
+    j->chunkMax = (int)getDbl(ID_CHUNKMAX, 2000); if (j->chunkMax < j->chunkMin) j->chunkMax = j->chunkMin;
+    j->chunk = (int)rrange(j->chunkMin, j->chunkMax);
     { double a = getDbl(ID_BRKMIN, 5), b = getDbl(ID_BRKMAX, 35);
       if (a < 0) a = 0; if (b < a) b = a;
       j->brkMin = a * 60000.0; j->brkMax = b * 60000.0; }
@@ -3037,9 +3041,10 @@ static void buildUI(void) {
     NUM(L"1.4", 74, 250, 38, ID_TYPOP);
     NUM(L"34", 176, 250, 38, ID_BURSTP);
     NUM(L"14", 282, 250, 38, ID_PAUSEP);
-    NUM(L"1500", 150, 283, 44, ID_CHUNK);
-    NUM(L"5", 242, 283, 28, ID_BRKMIN);
-    NUM(L"35", 290, 283, 28, ID_BRKMAX);
+    NUM(L"1000", 150, 283, 40, ID_CHUNK);
+    NUM(L"2000", 208, 283, 40, ID_CHUNKMAX);
+    NUM(L"5", 298, 283, 28, ID_BRKMIN);
+    NUM(L"35", 348, 283, 28, ID_BRKMAX);
     BTN(L"GO", 342, 314, 78, 30, ID_GO);
 
     buildPage = PG_TYPING;
@@ -3167,7 +3172,7 @@ static void rescaleAll(void) {
 static const struct { int id; const wchar_t *key; } SAVED[] = {
     { ID_REPEAT, L"Repeat" }, { ID_SPEED, L"Speed" }, { ID_WPM, L"WPM" }, { ID_MS, L"MsPerChar" },
     { ID_DELAY, L"StartDelay" }, { ID_TYPOP, L"TypoPct" }, { ID_BURSTP, L"BurstPct" }, { ID_PAUSEP, L"PausePct" },
-    { ID_CHUNK, L"ChunkChars" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" }, { ID_NAVMS, L"FixNavMs" }, { ID_DEDITS, L"FixEdits" },
+    { ID_CHUNK, L"ChunkChars" }, { ID_CHUNKMAX, L"ChunkCharsMax" }, { ID_BRKMIN, L"BreakMin" }, { ID_BRKMAX, L"BreakMax" }, { ID_NAVMS, L"FixNavMs" }, { ID_DEDITS, L"FixEdits" },
     { ID_CPS, L"ClickCps" }, { ID_CX, L"ClickX" }, { ID_CY, L"ClickY" }, { ID_CCOUNT, L"ClickCount" },
 };
 static const wchar_t *TOGKEY[TG_N] = { L"RecordMoves", L"ModeFixedWPM", L"ModeFixedMs", L"ModeHumanizer", L"Typos", L"DocsSafe", L"AutoCheck", L"AutoInstall", L"AutoGo", L"HumanPlay", L"ClickAtCursor", L"ClickHumanize" };
